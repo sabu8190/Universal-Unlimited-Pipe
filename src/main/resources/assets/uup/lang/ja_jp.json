@@ -1,0 +1,22 @@
+{
+    "itemGroup.uup": "Universal Unlimited Pipe (UUP)",
+    "block.uup.controller": "UUP コントローラー",
+    "block.uup.pipe": "UUP ユニバーサルパイプ (万能)",
+    "block.uup.energy_pipe": "UUP エネルギーパイプ",
+    "block.uup.fluid_pipe": "UUP フルードパイプ (液体用)",
+    "block.uup.item_pipe": "UUP アイテムパイプ",
+    "block.uup.gas_pipe": "UUP ガスパイプ (Mekanism対応)",
+    "block.uup.node": "UUP トランスファーノード",
+    "item.uup.overclock_upgrade": "UUP オーバークロックアップグレード",
+    "item.uup.network_card": "UUP ネットワークリンクカード",
+    "tooltip.uup.controller.desc": "§7単一ブロックで全ネットワークのアイテム・流体・エネルギー・ガスを集中管理・無線輸送します。",
+    "tooltip.uup.controller.rate": "§b最大転送レート: §fアイテム/流体 21億/t, エネルギー/ガス 922京/t",
+    "tooltip.uup.pipe.desc": "§7全リソース（アイテム・流体・エネルギー・ガス）を一括輸送できる万能パイプ。",
+    "tooltip.uup.energy_pipe.desc": "§e最大 922京 FE/t §7で瞬時に電力を給電する超高速エネルギー専用パイプ。",
+    "tooltip.uup.fluid_pipe.desc": "§9最大 21億 mB/t §7で瞬時に液体を移送する超高速液体専用パイプ。",
+    "tooltip.uup.item_pipe.desc": "§a最大 21億 アイテム/t §7で瞬時にアイテムを搬送する超高速アイテム専用パイプ。",
+    "tooltip.uup.gas_pipe.desc": "§d最大 922京 /t §7で瞬時にMekanismの気体/薬品を移送する超高速ガス専用パイプ。",
+    "tooltip.uup.node.desc": "§7チェストや機械、パイプ端面に取り付けて搬入・搬出・優先度・チャンネルを設定するパーツ。",
+    "tooltip.uup.upgrade.desc": "§6転送速度と並列バッチ処理能力を倍率強化します。",
+    "tooltip.uup.network_card.desc": "§aブロックを右クリックして座標を記録し、コントローラーに登録します。"
+}

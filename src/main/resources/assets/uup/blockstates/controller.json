@@ -1,0 +1,8 @@
+{
+    "variants": {
+        "facing=north": { "model": "uup:block/controller" },
+        "facing=south": { "model": "uup:block/controller", "y": 180 },
+        "facing=west":  { "model": "uup:block/controller", "y": 270 },
+        "facing=east":  { "model": "uup:block/controller", "y": 90 }
+    }
+}

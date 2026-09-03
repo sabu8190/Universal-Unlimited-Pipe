@@ -1,0 +1,22 @@
+{
+    "itemGroup.uup": "Universal Unlimited Pipe (UUP)",
+    "block.uup.controller": "UUP Controller",
+    "block.uup.pipe": "UUP Universal Pipe",
+    "block.uup.energy_pipe": "UUP Energy Pipe",
+    "block.uup.fluid_pipe": "UUP Fluid Pipe",
+    "block.uup.item_pipe": "UUP Item Pipe",
+    "block.uup.gas_pipe": "UUP Gas Pipe",
+    "block.uup.node": "UUP Transfer Node",
+    "item.uup.overclock_upgrade": "UUP Overclock Upgrade",
+    "item.uup.network_card": "UUP Network Link Card",
+    "tooltip.uup.controller.desc": "§7Centrally manages and wirelessly transports Items, Fluids, Energy, and Gases in a single block.",
+    "tooltip.uup.controller.rate": "§bMax Transfer Rate: §fItem/Fluid 2.14B/t, Energy/Gas 9.22E18/t",
+    "tooltip.uup.pipe.desc": "§7All-in-one universal pipe for transporting items, fluids, energy, and gases.",
+    "tooltip.uup.energy_pipe.desc": "§eMax 9.22E18 FE/t §7ultra-speed dedicated energy pipe.",
+    "tooltip.uup.fluid_pipe.desc": "§9Max 2.14B mB/t §7ultra-speed dedicated fluid pipe.",
+    "tooltip.uup.item_pipe.desc": "§aMax 2.14B items/t §7ultra-speed dedicated item pipe.",
+    "tooltip.uup.gas_pipe.desc": "§dMax 9.22E18/t §7ultra-speed dedicated gas pipe for Mekanism gases.",
+    "tooltip.uup.node.desc": "§7Transfer node part for advanced extraction/insertion mode, priority, and channel control.",
+    "tooltip.uup.upgrade.desc": "§6Multiplies transfer speed and batch processing capabilities.",
+    "tooltip.uup.network_card.desc": "§aRight-click a block to link its coordinates to the controller."
+}

@@ -1,0 +1,15 @@
+.gradle/
+build/
+out/
+run/
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+bin/
+logs/
+*.log
+latest.log
