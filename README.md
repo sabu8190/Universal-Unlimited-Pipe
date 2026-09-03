@@ -4,11 +4,17 @@
 [![Forge 47.3.0+](https://img.shields.io/badge/Forge-47.3.0+-orange.svg)](https://files.minecraftforge.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+## 📥 ビルド済み Mod JAR（直ダウンロード）
+👉 **[uup-1.20.1-1.0.0.jar をダウンロード (releases/)](https://github.com/sabu8190/Universal-Unlimited-Pipe/raw/main/releases/uup-1.20.1-1.0.0.jar)**
+
+---
+
 **Universal Unlimited Pipe (UUP)** は、Minecraft Forge 1.20.1 向けの超高速・超軽量・高機能な配管＆無線輸送ネットワークMODです。
 
 ---
 
 ## ✨ 主な特徴
+
 
 - **⚡ 超高速＆超軽量**:
   - パイプ自身はTick処理を行わず、コントローラー単一ブロックによる中央集権型高速ルーティングでサーバー負荷ゼロを実現。
