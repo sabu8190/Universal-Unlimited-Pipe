@@ -136,6 +136,30 @@ public class NetworkController {
         UUPLogger.debug(String.format("Rebuilt UUP network: %d pipes, %d nodes, %d controllers.", cachedPipes.size(), scannedNodePositions.size(), foundControllers.size()));
     }
 
+    private static <T> void collectForgeCap(
+            BlockEntity be,
+            net.minecraftforge.common.capabilities.Capability<T> cap,
+            Direction side,
+            boolean canInsert,
+            boolean canExtract,
+            List<T> injectors,
+            List<T> extractors
+    ) {
+        if (be == null) return;
+        var opt = be.getCapability(cap, side);
+        if (opt.isPresent()) {
+            opt.ifPresent(handler -> {
+                if (canInsert && !injectors.contains(handler)) injectors.add(handler);
+                if (canExtract && !extractors.contains(handler)) extractors.add(handler);
+            });
+        } else if (side != null) {
+            be.getCapability(cap, null).ifPresent(handler -> {
+                if (canInsert && !injectors.contains(handler)) injectors.add(handler);
+                if (canExtract && !extractors.contains(handler)) extractors.add(handler);
+            });
+        }
+    }
+
     public void tick(ServerLevel level, BlockPos originPos) {
         tickCounter++;
         int interval = ModConfig.COMMON != null && ModConfig.COMMON.tickInterval != null 
@@ -225,20 +249,9 @@ public class NetworkController {
             boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
             boolean canExtract = node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH;
 
-            be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
-                if (canInsert && !itemInjectors.contains(handler)) itemInjectors.add(handler);
-                if (canExtract && !itemExtractors.contains(handler)) itemExtractors.add(handler);
-            });
-
-            be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
-                if (canInsert && !fluidInjectors.contains(handler)) fluidInjectors.add(handler);
-                if (canExtract && !fluidExtractors.contains(handler)) fluidExtractors.add(handler);
-            });
-
-            be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
-                if (canInsert && !energyInjectors.contains(handler)) energyInjectors.add(handler);
-                if (canExtract && !energyExtractors.contains(handler)) energyExtractors.add(handler);
-            });
+            collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, canInsert, canExtract, itemInjectors, itemExtractors);
+            collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, canInsert, canExtract, fluidInjectors, fluidExtractors);
+            collectForgeCap(be, ForgeCapabilities.ENERGY, side, canInsert, canExtract, energyInjectors, energyExtractors);
 
             EnergyTransferExecutor.collectMekanismCapabilities(
                     be, side,
@@ -277,26 +290,17 @@ public class NetworkController {
 
                 // Item transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ITEM) {
-                    be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
-                        if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
-                        if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
-                    });
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, true, true, itemInjectors, itemExtractors);
                 }
 
                 // Fluid transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.FLUID) {
-                    be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
-                        if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
-                        if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
-                    });
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, true, true, fluidInjectors, fluidExtractors);
                 }
 
                 // Energy transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ENERGY) {
-                    be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
-                        if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
-                        if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
-                    });
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, true, true, energyInjectors, energyExtractors);
                     EnergyTransferExecutor.collectMekanismCapabilities(
                             be, side,
                             true, true,
@@ -334,20 +338,9 @@ public class NetworkController {
 
                 Direction side = dir.getOpposite();
 
-                be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
-                    if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
-                    if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
-                });
-
-                be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
-                    if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
-                    if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
-                });
-
-                be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
-                    if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
-                    if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
-                });
+                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, true, true, itemInjectors, itemExtractors);
+                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, true, true, fluidInjectors, fluidExtractors);
+                collectForgeCap(be, ForgeCapabilities.ENERGY, side, true, true, energyInjectors, energyExtractors);
 
                 EnergyTransferExecutor.collectMekanismCapabilities(
                         be, side,

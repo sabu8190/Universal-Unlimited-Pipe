@@ -108,20 +108,26 @@ public class PipeBlock extends Block implements EntityBlock {
             Direction opposite = direction.getOpposite();
             if (this.type == PipeType.ENERGY) {
                 return be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                        || be.getCapability(ForgeCapabilities.ENERGY, null).isPresent()
                         || EnergyTransferExecutor.canConnectStrictEnergy(be, opposite);
             }
             if (this.type == PipeType.FLUID) {
-                return be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent();
+                return be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
+                        || be.getCapability(ForgeCapabilities.FLUID_HANDLER, null).isPresent();
             }
             if (this.type == PipeType.ITEM) {
-                return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent();
+                return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
+                        || be.getCapability(ForgeCapabilities.ITEM_HANDLER, null).isPresent();
             }
             if (this.type == PipeType.GAS) {
                 return GasTransferExecutor.canConnectGas(be, opposite);
             }
             return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
+                    || be.getCapability(ForgeCapabilities.ITEM_HANDLER, null).isPresent()
                     || be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
+                    || be.getCapability(ForgeCapabilities.FLUID_HANDLER, null).isPresent()
                     || be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                    || be.getCapability(ForgeCapabilities.ENERGY, null).isPresent()
                     || EnergyTransferExecutor.canConnectStrictEnergy(be, opposite)
                     || GasTransferExecutor.canConnectGas(be, opposite);
         }
@@ -168,16 +174,31 @@ public class PipeBlock extends Block implements EntityBlock {
         return shape;
     }
 
-    public boolean isConnectedToMachine(LevelAccessor level, BlockPos pos, Direction dir) {
+    public boolean isConnectedToTarget(LevelAccessor level, BlockPos pos, Direction dir) {
         BlockPos neighbor = pos.relative(dir);
         if (!level.hasChunkAt(neighbor)) return false;
         BlockState neighborState = level.getBlockState(neighbor);
-        if (neighborState.getBlock() instanceof PipeBlock || neighborState.is(ModBlocks.CONTROLLER.get()) || neighborState.is(ModBlocks.NODE.get())) {
+        if (neighborState.getBlock() instanceof PipeBlock) {
             return false;
         }
+        if (neighborState.is(ModBlocks.CONTROLLER.get()) || neighborState.is(ModBlocks.NODE.get())) {
+            return true;
+        }
         BlockEntity neighborBE = level.getBlockEntity(neighbor);
-        if (neighborBE == null) return false;
+        if (neighborBE != null) {
+            return true;
+        }
         return canConnectTo(level, pos, dir);
+    }
+
+    private static double getDistanceToDir(double dx, double dy, double dz, Direction dir) {
+        double tx = dir.getStepX() * 0.5;
+        double ty = dir.getStepY() * 0.5;
+        double tz = dir.getStepZ() * 0.5;
+        double diffX = dx - tx;
+        double diffY = dy - ty;
+        double diffZ = dz - tz;
+        return diffX * diffX + diffY * diffY + diffZ * diffZ;
     }
 
     @Override
@@ -194,51 +215,27 @@ public class PipeBlock extends Block implements EntityBlock {
             if (be instanceof PipeBlockEntity pipeBE && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
                 java.util.List<Direction> connectedSides = new java.util.ArrayList<>();
                 for (Direction dir : Direction.values()) {
-                    if (state.getValue(DIRECTION_PROPERTIES.get(dir)) && isConnectedToMachine(level, pos, dir)) {
+                    if (state.getValue(DIRECTION_PROPERTIES.get(dir)) || isConnectedToTarget(level, pos, dir)) {
                         connectedSides.add(dir);
                     }
                 }
 
-                if (connectedSides.isEmpty()) {
-                    return net.minecraft.world.InteractionResult.PASS;
-                }
-
                 Direction targetSide = null;
 
-                // 1. Check hit position offset from pipe center to determine clicked arm/side
                 net.minecraft.world.phys.Vec3 hitVec = hit.getLocation();
                 double dx = hitVec.x - (pos.getX() + 0.5);
                 double dy = hitVec.y - (pos.getY() + 0.5);
                 double dz = hitVec.z - (pos.getZ() + 0.5);
 
-                double absX = Math.abs(dx);
-                double absY = Math.abs(dy);
-                double absZ = Math.abs(dz);
-
-                Direction dominantDir = null;
-                if (absX >= absY && absX >= absZ && absX > 0.2) {
-                    dominantDir = dx > 0 ? Direction.EAST : Direction.WEST;
-                } else if (absY >= absX && absY >= absZ && absY > 0.2) {
-                    dominantDir = dy > 0 ? Direction.UP : Direction.DOWN;
-                } else if (absZ >= absX && absZ >= absY && absZ > 0.2) {
-                    dominantDir = dz > 0 ? Direction.SOUTH : Direction.NORTH;
-                }
-
-                if (dominantDir != null && connectedSides.contains(dominantDir)) {
-                    targetSide = dominantDir;
-                }
-
-                // 2. Check clicked face
-                if (targetSide == null) {
-                    Direction clickedSide = hit.getDirection();
-                    if (connectedSides.contains(clickedSide)) {
-                        targetSide = clickedSide;
-                    }
-                }
-
-                // 3. Fallback to single or first connected side
-                if (targetSide == null) {
-                    targetSide = connectedSides.get(0);
+                if (!connectedSides.isEmpty()) {
+                    // Pick the connected machine/node closest to the exact clicked spot
+                    targetSide = connectedSides.stream().min((d1, d2) -> {
+                        double dist1 = getDistanceToDir(dx, dy, dz, d1);
+                        double dist2 = getDistanceToDir(dx, dy, dz, d2);
+                        return Double.compare(dist1, dist2);
+                    }).orElse(connectedSides.get(0));
+                } else {
+                    targetSide = hit.getDirection();
                 }
 
                 final Direction finalSide = targetSide;
