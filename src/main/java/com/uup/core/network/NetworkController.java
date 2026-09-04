@@ -10,12 +10,15 @@ import com.uup.core.transfer.GasTransferExecutor;
 import com.uup.core.transfer.ItemTransferExecutor;
 import com.uup.logging.UUPLogger;
 import com.uup.setup.ModBlocks;
+import com.uup.setup.ModItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.Containers;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -195,6 +198,32 @@ public class NetworkController {
         Set<BlockPos> handledPositions = new HashSet<>();
 
         // 1. Process configured wireless nodes (Registered via Network Upgrade cards only)
+        // Check for broken wireless remote target blocks, drop reset card and remove node
+        Iterator<TransferNode> it = configuredNodes.iterator();
+        while (it.hasNext()) {
+            TransferNode node = it.next();
+            if (node.isWirelessRemote()) {
+                BlockPos targetPos = node.getPos();
+                ServerLevel targetLevel = (level.getServer() != null && node.getDimension() != null)
+                        ? level.getServer().getLevel(node.getDimension())
+                        : level;
+                if (targetLevel != null && targetLevel.isLoaded(targetPos)) {
+                    if (targetLevel.getBlockState(targetPos).isAir()) {
+                        Containers.dropItemStack(
+                                targetLevel,
+                                targetPos.getX() + 0.5,
+                                targetPos.getY() + 0.5,
+                                targetPos.getZ() + 0.5,
+                                new ItemStack(ModItems.NETWORK_CARD.get())
+                        );
+                        UUPLogger.info(String.format("Wireless target block at %s was broken! Dropped Network Card and reset coordinate.", targetPos.toShortString()));
+                        it.remove();
+                        networkDirty = true;
+                    }
+                }
+            }
+        }
+
         List<TransferNode> allActiveNodes = new ArrayList<>();
         for (TransferNode node : configuredNodes) {
             if (node.isWirelessRemote()) {
@@ -239,9 +268,12 @@ public class NetworkController {
             if (node.getMode() == TransferMode.DISABLED) continue;
             
             BlockPos targetPos = node.isWirelessRemote() ? node.getPos() : node.getPos().relative(node.getTargetSide());
-            if (!level.isLoaded(targetPos)) continue;
+            ServerLevel targetLevel = (node.isWirelessRemote() && level.getServer() != null && node.getDimension() != null)
+                    ? level.getServer().getLevel(node.getDimension())
+                    : level;
+            if (targetLevel == null || !targetLevel.isLoaded(targetPos)) continue;
 
-            BlockEntity be = level.getBlockEntity(targetPos);
+            BlockEntity be = targetLevel.getBlockEntity(targetPos);
             if (be == null) continue;
 
             handledPositions.add(targetPos);

@@ -6,11 +6,15 @@ import com.uup.core.network.TransferNode;
 import com.uup.setup.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.capabilities.Capability;
@@ -47,9 +51,25 @@ public class ControllerBlockEntity extends BlockEntity {
         CompoundTag tag = card.getTag();
         if (tag != null && tag.contains("TargetPos")) {
             BlockPos targetPos = BlockPos.of(tag.getLong("TargetPos"));
+            ResourceKey<Level> dimKey = level != null ? level.dimension() : Level.OVERWORLD;
+            if (tag.contains("TargetDim")) {
+                dimKey = ResourceKey.create(Registries.DIMENSION, new ResourceLocation(tag.getString("TargetDim")));
+            }
+
+            ServerLevel targetLevel = (level != null && level.getServer() != null) ? level.getServer().getLevel(dimKey) : (level instanceof ServerLevel sl ? sl : null);
+            if (targetLevel != null && targetLevel.isLoaded(targetPos)) {
+                if (targetLevel.getBlockState(targetPos).isAir()) {
+                    player.sendSystemMessage(Component.literal("§c[UUP] 登録先のブロックが存在しない（空気）ため登録できません"));
+                    return;
+                }
+            } else if (level != null && level.isLoaded(targetPos) && level.getBlockState(targetPos).isAir()) {
+                player.sendSystemMessage(Component.literal("§c[UUP] 登録先のブロックが存在しない（空気）ため登録できません"));
+                return;
+            }
+
             TransferNode remoteNode = new TransferNode(
                     targetPos,
-                    level.dimension(),
+                    dimKey,
                     Direction.UP,
                     TransferMode.BOTH,
                     0,

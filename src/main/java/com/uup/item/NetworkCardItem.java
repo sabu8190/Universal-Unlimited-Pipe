@@ -24,11 +24,19 @@ public class NetworkCardItem extends Item {
         Level level = context.getLevel();
         if (!level.isClientSide) {
             BlockPos targetPos = context.getClickedPos();
+            if (level.getBlockState(targetPos).isAir()) {
+                if (context.getPlayer() != null) {
+                    context.getPlayer().sendSystemMessage(Component.literal("§c[UUP] 空気のブロックは登録できません"));
+                }
+                return InteractionResult.FAIL;
+            }
             ItemStack stack = context.getItemInHand();
             CompoundTag tag = stack.getOrCreateTag();
             tag.putLong("TargetPos", targetPos.asLong());
             tag.putString("TargetDim", level.dimension().location().toString());
-            context.getPlayer().sendSystemMessage(Component.literal("§a[UUP] Linked target block: " + targetPos.toShortString() + " in " + level.dimension().location()));
+            if (context.getPlayer() != null) {
+                context.getPlayer().sendSystemMessage(Component.literal("§a[UUP] Linked target block: " + targetPos.toShortString() + " in " + level.dimension().location()));
+            }
             return InteractionResult.SUCCESS;
         }
         return InteractionResult.sidedSuccess(level.isClientSide);
