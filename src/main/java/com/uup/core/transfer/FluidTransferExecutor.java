@@ -30,34 +30,71 @@ public class FluidTransferExecutor {
         if (maxToMove <= 0) maxToMove = Integer.MAX_VALUE;
 
         long filledTotal = 0;
+        int tanks = sourceHandler.getTanks();
 
-        // Ultra-fast Direct 1-Pass Distribution (Zero allocations, O(Targets))
-        for (IFluidHandler target : targetHandlers) {
-            if (target == sourceHandler) continue;
-            if (filledTotal >= maxToMove) break;
+        if (tanks > 0) {
+            for (int tank = 0; tank < tanks && filledTotal < maxToMove; tank++) {
+                FluidStack inTank = sourceHandler.getFluidInTank(tank);
+                if (inTank.isEmpty()) continue;
 
-            // 1. Simulate draining a sample from source to know fluid type
-            int queryLimit = (int) Math.min(Integer.MAX_VALUE, maxToMove - filledTotal);
-            FluidStack sample = sourceHandler.drain(queryLimit, IFluidHandler.FluidAction.SIMULATE);
-            if (sample.isEmpty()) break; // Source empty
+                for (IFluidHandler target : targetHandlers) {
+                    if (target == sourceHandler) continue;
+                    if (filledTotal >= maxToMove) break;
 
-            // 2. Check target's immediate intake capacity (Simulation)
-            int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
-            if (canAccept <= 0) continue;
+                    int queryLimit = (int) Math.min((long) inTank.getAmount(), maxToMove - filledTotal);
+                    if (queryLimit <= 0) break;
 
-            // 3. Extract exact accepted amount from source (Execution)
-            FluidStack actuallyExtracted = sourceHandler.drain(canAccept, IFluidHandler.FluidAction.EXECUTE);
-            if (actuallyExtracted.isEmpty()) break;
+                    // 1. Simulate target intake capacity
+                    FluidStack sample = inTank.copy();
+                    sample.setAmount(queryLimit);
+                    int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
+                    if (canAccept <= 0) continue;
 
-            // 4. Inject into target (Execution)
-            int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
-            filledTotal += accepted;
+                    // 2. Extract from source
+                    FluidStack toDrain = inTank.copy();
+                    toDrain.setAmount(canAccept);
+                    FluidStack actuallyExtracted = sourceHandler.drain(toDrain, IFluidHandler.FluidAction.EXECUTE);
+                    if (actuallyExtracted.isEmpty()) {
+                        actuallyExtracted = sourceHandler.drain(canAccept, IFluidHandler.FluidAction.EXECUTE);
+                    }
+                    if (actuallyExtracted.isEmpty()) break;
 
-            // Rollback if any unexpected remainder (fail-safe)
-            int unaccepted = actuallyExtracted.getAmount() - accepted;
-            if (unaccepted > 0) {
-                actuallyExtracted.setAmount(unaccepted);
-                sourceHandler.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+                    // 3. Inject into target
+                    int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+                    filledTotal += accepted;
+
+                    // Rollback remainder if any
+                    int unaccepted = actuallyExtracted.getAmount() - accepted;
+                    if (unaccepted > 0) {
+                        actuallyExtracted.setAmount(unaccepted);
+                        sourceHandler.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+                    }
+                }
+            }
+        } else {
+            // Fallback for fluid handlers where getTanks() returns 0
+            for (IFluidHandler target : targetHandlers) {
+                if (target == sourceHandler) continue;
+                if (filledTotal >= maxToMove) break;
+
+                int queryLimit = (int) Math.min((long) Integer.MAX_VALUE, maxToMove - filledTotal);
+                FluidStack sample = sourceHandler.drain(queryLimit, IFluidHandler.FluidAction.SIMULATE);
+                if (sample.isEmpty()) break;
+
+                int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
+                if (canAccept <= 0) continue;
+
+                FluidStack actuallyExtracted = sourceHandler.drain(canAccept, IFluidHandler.FluidAction.EXECUTE);
+                if (actuallyExtracted.isEmpty()) break;
+
+                int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+                filledTotal += accepted;
+
+                int unaccepted = actuallyExtracted.getAmount() - accepted;
+                if (unaccepted > 0) {
+                    actuallyExtracted.setAmount(unaccepted);
+                    sourceHandler.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+                }
             }
         }
 

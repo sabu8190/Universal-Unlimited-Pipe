@@ -41,61 +41,35 @@ public class ItemTransferExecutor {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
 
-            int extractLimit = (int) Math.min(inSlot.getCount(), maxToMove - movedTotal);
-            if (extractLimit <= 0) break;
-
-            // Check if we can use Fast-Path (Same item type as previous successful target)
-            boolean isSameItem = !cachedItemType.isEmpty() && ItemStack.isSameItemSameTags(inSlot, cachedItemType);
-
-            if (isSameItem && cachedTarget != null && cachedTarget != sourceHandler) {
-                // Fast-Path: Directly attempt transfer to the cached target without simulation
-                ItemStack extracted = sourceHandler.extractItem(slot, extractLimit, false);
-                if (!extracted.isEmpty()) {
-                    ItemStack remainder = ItemHandlerHelper.insertItemStacked(cachedTarget, extracted, false);
-                    int moved = extracted.getCount() - remainder.getCount();
-                    movedTotal += moved;
-
-                    if (!remainder.isEmpty()) {
-                        // Cached target is now full/partially full, rollback remainder and invalidate cache
-                        ItemHandlerHelper.insertItemStacked(sourceHandler, remainder, false);
-                        cachedTarget = null;
-                    } else {
-                        // Successfully moved entire stack through Fast-Path! Continue to next slot
-                        continue;
-                    }
-                }
-            }
-
-            // Normal Path: Iterate through targets with simulation
             for (IItemHandler target : targetHandlers) {
                 if (target == sourceHandler) continue;
                 if (movedTotal >= maxToMove) break;
 
-                int currentLimit = (int) Math.min(sourceHandler.getStackInSlot(slot).getCount(), maxToMove - movedTotal);
+                ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
+                if (currentInSlot.isEmpty()) break;
+
+                int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
                 if (currentLimit <= 0) break;
 
+                // 1. Simulate extraction from source
                 ItemStack simulatedExtract = sourceHandler.extractItem(slot, currentLimit, true);
                 if (simulatedExtract.isEmpty()) break;
 
+                // 2. Simulate insertion into target
                 ItemStack remainder = ItemHandlerHelper.insertItemStacked(target, simulatedExtract, true);
                 int accepted = simulatedExtract.getCount() - remainder.getCount();
                 if (accepted <= 0) continue;
 
-                // Execute extract and insert
+                // 3. Execute extract and insert
                 ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
                 if (!actuallyExtracted.isEmpty()) {
                     ItemStack insertedRemainder = ItemHandlerHelper.insertItemStacked(target, actuallyExtracted, false);
                     int actuallyMoved = actuallyExtracted.getCount() - insertedRemainder.getCount();
                     movedTotal += actuallyMoved;
 
-                    // Update Fast-Path Cache if target accepted items completely
-                    if (insertedRemainder.isEmpty()) {
-                        cachedItemType = actuallyExtracted.copy();
-                        cachedTarget = target;
-                    } else {
-                        // Target became full, rollback remainder
+                    // Rollback remainder if any
+                    if (!insertedRemainder.isEmpty()) {
                         ItemHandlerHelper.insertItemStacked(sourceHandler, insertedRemainder, false);
-                        cachedTarget = null;
                     }
                 }
             }

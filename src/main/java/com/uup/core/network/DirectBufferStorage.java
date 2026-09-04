@@ -9,7 +9,7 @@ import net.minecraftforge.items.ItemStackHandler;
 
 public class DirectBufferStorage implements INBTSerializable<CompoundTag> {
 
-    public static final int ITEM_SLOT_COUNT = 54;
+    public static final int ITEM_SLOT_COUNT = 108;
     public static final int MAX_FLUID_CAPACITY = Integer.MAX_VALUE;
     public static final int MAX_ENERGY_CAPACITY = Integer.MAX_VALUE;
 
@@ -22,7 +22,7 @@ public class DirectBufferStorage implements INBTSerializable<CompoundTag> {
         this.itemBuffer = new ItemStackHandler(ITEM_SLOT_COUNT) {
             @Override
             public int getSlotLimit(int slot) {
-                return 64;
+                return Integer.MAX_VALUE;
             }
         };
         this.fluidBuffer = new FluidTank(MAX_FLUID_CAPACITY);
