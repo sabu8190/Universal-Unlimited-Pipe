@@ -17,7 +17,7 @@ public class FluidTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        if (sourceHandler == null || targetHandlers.isEmpty()) {
+        if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
 
@@ -28,26 +28,40 @@ public class FluidTransferExecutor {
 
         long maxToMove = (long) (baseRate * Math.pow(multiplier, Math.min(overclocks, 16)));
         if (maxToMove <= 0) maxToMove = Integer.MAX_VALUE;
-        int maxInt = (int) Math.min(maxToMove, Integer.MAX_VALUE);
 
-        FluidStack simulatedDrain = sourceHandler.drain(maxInt, IFluidHandler.FluidAction.SIMULATE);
-        if (simulatedDrain.isEmpty()) return 0;
+        long filledTotal = 0;
 
-        FluidStack toInsert = simulatedDrain.copy();
-        int filledTotal = 0;
-
+        // Ultra-fast Direct 1-Pass Distribution (Zero allocations, O(Targets))
         for (IFluidHandler target : targetHandlers) {
             if (target == sourceHandler) continue;
-            if (toInsert.isEmpty()) break;
-            int filled = target.fill(toInsert, IFluidHandler.FluidAction.EXECUTE);
-            if (filled > 0) {
-                filledTotal += filled;
-                toInsert.shrink(filled);
+            if (filledTotal >= maxToMove) break;
+
+            // 1. Simulate draining a sample from source to know fluid type
+            int queryLimit = (int) Math.min(Integer.MAX_VALUE, maxToMove - filledTotal);
+            FluidStack sample = sourceHandler.drain(queryLimit, IFluidHandler.FluidAction.SIMULATE);
+            if (sample.isEmpty()) break; // Source empty
+
+            // 2. Check target's immediate intake capacity (Simulation)
+            int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
+            if (canAccept <= 0) continue;
+
+            // 3. Extract exact accepted amount from source (Execution)
+            FluidStack actuallyExtracted = sourceHandler.drain(canAccept, IFluidHandler.FluidAction.EXECUTE);
+            if (actuallyExtracted.isEmpty()) break;
+
+            // 4. Inject into target (Execution)
+            int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
+            filledTotal += accepted;
+
+            // Rollback if any unexpected remainder (fail-safe)
+            int unaccepted = actuallyExtracted.getAmount() - accepted;
+            if (unaccepted > 0) {
+                actuallyExtracted.setAmount(unaccepted);
+                sourceHandler.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
             }
         }
 
         if (filledTotal > 0) {
-            sourceHandler.drain(filledTotal, IFluidHandler.FluidAction.EXECUTE);
             UUPLogger.logTransfer("FLUID", filledTotal, sourceLabel, targetLabel);
         }
         return filledTotal;
@@ -58,7 +72,7 @@ public class FluidTransferExecutor {
             List<IFluidHandler> targetHandlers,
             int overclocks
     ) {
-        if (storage == null || targetHandlers.isEmpty()) return;
+        if (storage == null || targetHandlers == null || targetHandlers.isEmpty()) return;
         executeTransfer(storage.getFluidBuffer(), targetHandlers, overclocks, "UUP_Controller_Fluid_Buffer", "Network_Targets");
     }
 }

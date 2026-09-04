@@ -76,39 +76,31 @@ public class MekanismChemicalTransfer {
             S inTank = source.getChemicalInTank(tank);
             if (inTank.isEmpty()) continue;
 
-            long extractLimit = inTank.getAmount();
-            S simulatedExtract = source.extractChemical(tank, extractLimit, Action.SIMULATE);
-            if (simulatedExtract.isEmpty()) continue;
-
-            S toInsert = (S) simulatedExtract.copy();
-            long acceptedTotal = 0;
-
-            // Step 1: 1-Pass demand check across all targets (Simulation)
+            // Direct 1-Pass to all targets (O(Targets))
             for (IChemicalHandler<C, S> target : targets) {
                 if (target == source) continue;
-                if (toInsert.isEmpty()) break;
 
-                S remainder = target.insertChemical(toInsert, Action.SIMULATE);
-                long accepted = toInsert.getAmount() - (remainder.isEmpty() ? 0 : remainder.getAmount());
-                if (accepted > 0) {
-                    acceptedTotal += accepted;
-                    toInsert.shrink(accepted);
-                }
-            }
+                // 1. Simulate extracting available amount
+                S sample = source.extractChemical(tank, Long.MAX_VALUE, Action.SIMULATE);
+                if (sample.isEmpty()) break;
 
-            // Step 2 & 3: Extract from source and insert into targets (Execution)
-            if (acceptedTotal > 0) {
-                S actuallyExtracted = source.extractChemical(tank, acceptedTotal, Action.EXECUTE);
-                if (!actuallyExtracted.isEmpty()) {
-                    S moving = (S) actuallyExtracted.copy();
-                    for (IChemicalHandler<C, S> target : targets) {
-                        if (target == source) continue;
-                        if (moving.isEmpty()) break;
+                // 2. Check target's immediate intake demand (Simulation)
+                S remainder = target.insertChemical(sample, Action.SIMULATE);
+                long canAccept = sample.getAmount() - (remainder.isEmpty() ? 0 : remainder.getAmount());
+                if (canAccept <= 0) continue;
 
-                        moving = target.insertChemical(moving, Action.EXECUTE);
-                    }
-                    long actuallyMoved = actuallyExtracted.getAmount() - (moving.isEmpty() ? 0 : moving.getAmount());
-                    movedTotal += actuallyMoved;
+                // 3. Extract exact accepted amount from source (Execution)
+                S actuallyExtracted = source.extractChemical(tank, canAccept, Action.EXECUTE);
+                if (actuallyExtracted.isEmpty()) break;
+
+                // 4. Inject into target (Execution)
+                S unaccepted = target.insertChemical(actuallyExtracted, Action.EXECUTE);
+                long accepted = actuallyExtracted.getAmount() - (unaccepted.isEmpty() ? 0 : unaccepted.getAmount());
+                movedTotal += accepted;
+
+                // Rollback if any unexpected unaccepted amount
+                if (!unaccepted.isEmpty() && unaccepted.getAmount() > 0) {
+                    source.insertChemical(tank, unaccepted, Action.EXECUTE);
                 }
             }
         }

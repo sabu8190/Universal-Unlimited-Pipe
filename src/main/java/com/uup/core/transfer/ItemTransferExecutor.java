@@ -18,7 +18,7 @@ public class ItemTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        if (sourceHandler == null || targetHandlers.isEmpty()) {
+        if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
 
@@ -31,43 +31,38 @@ public class ItemTransferExecutor {
         if (maxToMove <= 0) maxToMove = Integer.MAX_VALUE;
 
         long movedTotal = 0;
+        int slots = sourceHandler.getSlots();
 
-        for (int slot = 0; slot < sourceHandler.getSlots() && movedTotal < maxToMove; slot++) {
+        for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
 
-            int extractLimit = (int) Math.min(inSlot.getCount(), maxToMove - movedTotal);
-            ItemStack simulatedExtract = sourceHandler.extractItem(slot, extractLimit, true);
-            if (simulatedExtract.isEmpty()) continue;
-
-            // Find how much can actually be inserted into valid targets (skipping sourceHandler)
-            ItemStack toInsert = simulatedExtract.copy();
-            int canAcceptTotal = 0;
-
+            // Direct 1-Pass distribution per target
             for (IItemHandler target : targetHandlers) {
                 if (target == sourceHandler) continue;
-                if (toInsert.isEmpty()) break;
+                if (movedTotal >= maxToMove) break;
 
-                ItemStack remainder = ItemHandlerHelper.insertItemStacked(target, toInsert, true);
-                int accepted = toInsert.getCount() - remainder.getCount();
-                if (accepted > 0) {
-                    canAcceptTotal += accepted;
-                    toInsert.shrink(accepted);
-                }
-            }
+                int extractLimit = (int) Math.min(inSlot.getCount(), maxToMove - movedTotal);
+                if (extractLimit <= 0) break;
 
-            if (canAcceptTotal > 0) {
-                // Actually extract the exact accepted amount from source
-                ItemStack actuallyExtracted = sourceHandler.extractItem(slot, canAcceptTotal, false);
+                ItemStack simulatedExtract = sourceHandler.extractItem(slot, extractLimit, true);
+                if (simulatedExtract.isEmpty()) break;
+
+                ItemStack remainder = ItemHandlerHelper.insertItemStacked(target, simulatedExtract, true);
+                int accepted = simulatedExtract.getCount() - remainder.getCount();
+                if (accepted <= 0) continue;
+
+                // Execute extract and insert
+                ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
                 if (!actuallyExtracted.isEmpty()) {
-                    ItemStack movingStack = actuallyExtracted.copy();
-                    for (IItemHandler target : targetHandlers) {
-                        if (target == sourceHandler) continue;
-                        if (movingStack.isEmpty()) break;
-                        movingStack = ItemHandlerHelper.insertItemStacked(target, movingStack, false);
-                    }
-                    int actuallyMoved = actuallyExtracted.getCount() - movingStack.getCount();
+                    ItemStack insertedRemainder = ItemHandlerHelper.insertItemStacked(target, actuallyExtracted, false);
+                    int actuallyMoved = actuallyExtracted.getCount() - insertedRemainder.getCount();
                     movedTotal += actuallyMoved;
+
+                    // Rollback if any unexpected remainder
+                    if (!insertedRemainder.isEmpty()) {
+                        ItemHandlerHelper.insertItemStacked(sourceHandler, insertedRemainder, false);
+                    }
                 }
             }
         }
@@ -83,7 +78,7 @@ public class ItemTransferExecutor {
             List<IItemHandler> targetHandlers,
             int overclocks
     ) {
-        if (storage == null || targetHandlers.isEmpty()) return;
+        if (storage == null || targetHandlers == null || targetHandlers.isEmpty()) return;
         executeTransfer(storage.getItemBuffer(), targetHandlers, overclocks, "UUP_Controller_Buffer", "Network_Targets");
     }
 }
