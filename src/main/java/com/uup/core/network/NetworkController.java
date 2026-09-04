@@ -170,9 +170,15 @@ public class NetworkController {
 
         Set<BlockPos> handledPositions = new HashSet<>();
 
-        // 1. Process configured nodes (Manual / Wireless Cards / Attached Node blocks / Pipe Side Settings)
-        List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
+        // 1. Process configured wireless nodes (Registered via Network Upgrade cards only)
+        List<TransferNode> allActiveNodes = new ArrayList<>();
+        for (TransferNode node : configuredNodes) {
+            if (node.isWirelessRemote()) {
+                allActiveNodes.add(node);
+            }
+        }
 
+        // Process physically connected wired transfer nodes (Must be adjacent to a pipe in cachedPipes)
         for (BlockPos nodePos : scannedNodePositions) {
             if (level.isLoaded(nodePos)) {
                 BlockEntity be = level.getBlockEntity(nodePos);
@@ -425,7 +431,10 @@ public class NetworkController {
         if (tag.contains("Nodes")) {
             ListTag list = tag.getList("Nodes", Tag.TAG_COMPOUND);
             for (int i = 0; i < list.size(); i++) {
-                configuredNodes.add(TransferNode.deserializeNBT(list.getCompound(i)));
+                TransferNode node = TransferNode.deserializeNBT(list.getCompound(i));
+                if (node.isWirelessRemote()) {
+                    configuredNodes.add(node);
+                }
             }
         }
         networkDirty = true;
