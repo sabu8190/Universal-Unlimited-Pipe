@@ -5,6 +5,7 @@ import com.uup.blockentity.NodeBlockEntity;
 import com.uup.config.ModConfig;
 import com.uup.core.transfer.EnergyTransferExecutor;
 import com.uup.core.transfer.FluidTransferExecutor;
+import com.uup.core.transfer.GasTransferExecutor;
 import com.uup.core.transfer.ItemTransferExecutor;
 import com.uup.logging.UUPLogger;
 import com.uup.setup.ModBlocks;
@@ -154,6 +155,15 @@ public class NetworkController {
         List<IEnergyStorage> energyInjectors = new ArrayList<>();
         List<IEnergyStorage> energyExtractors = new ArrayList<>();
 
+        List<Object> gasInjectors = new ArrayList<>();
+        List<Object> gasExtractors = new ArrayList<>();
+        List<Object> infuseInjectors = new ArrayList<>();
+        List<Object> infuseExtractors = new ArrayList<>();
+        List<Object> pigmentInjectors = new ArrayList<>();
+        List<Object> pigmentExtractors = new ArrayList<>();
+        List<Object> slurryInjectors = new ArrayList<>();
+        List<Object> slurryExtractors = new ArrayList<>();
+
         Set<BlockPos> handledPositions = new HashSet<>();
 
         // 1. Process configured nodes (Manual / Wireless Cards / Attached Node blocks)
@@ -179,33 +189,32 @@ public class NetworkController {
 
             handledPositions.add(targetPos);
             Direction side = node.getTargetSide().getOpposite();
+            boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
+            boolean canExtract = node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH;
 
             be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
-                if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
-                    if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
-                }
-                if (node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH) {
-                    if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
-                }
+                if (canInsert && !itemInjectors.contains(handler)) itemInjectors.add(handler);
+                if (canExtract && !itemExtractors.contains(handler)) itemExtractors.add(handler);
             });
 
             be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
-                if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
-                    if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
-                }
-                if (node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH) {
-                    if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
-                }
+                if (canInsert && !fluidInjectors.contains(handler)) fluidInjectors.add(handler);
+                if (canExtract && !fluidExtractors.contains(handler)) fluidExtractors.add(handler);
             });
 
             be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
-                if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
-                    if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
-                }
-                if (node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH) {
-                    if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
-                }
+                if (canInsert && !energyInjectors.contains(handler)) energyInjectors.add(handler);
+                if (canExtract && !energyExtractors.contains(handler)) energyExtractors.add(handler);
             });
+
+            GasTransferExecutor.collectCapabilities(
+                    be, side,
+                    canInsert, canExtract,
+                    gasInjectors, gasExtractors,
+                    infuseInjectors, infuseExtractors,
+                    pigmentInjectors, pigmentExtractors,
+                    slurryInjectors, slurryExtractors
+            );
         }
 
         // 2. Process Direct Pipe Connections
@@ -250,6 +259,18 @@ public class NetworkController {
                         if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
                     });
                 }
+
+                // Gas & Chemical transfer
+                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.GAS) {
+                    GasTransferExecutor.collectCapabilities(
+                            be, side,
+                            true, true,
+                            gasInjectors, gasExtractors,
+                            infuseInjectors, infuseExtractors,
+                            pigmentInjectors, pigmentExtractors,
+                            slurryInjectors, slurryExtractors
+                    );
+                }
             }
         }
 
@@ -270,6 +291,13 @@ public class NetworkController {
         for (IEnergyStorage extractor : energyExtractors) {
             EnergyTransferExecutor.executeTransfer(extractor, energyInjectors, overclockCount, "UUP_Energy_Extract", "UUP_Energy_Insert");
         }
+        GasTransferExecutor.executeAllTransfers(
+                gasInjectors, gasExtractors,
+                infuseInjectors, infuseExtractors,
+                pigmentInjectors, pigmentExtractors,
+                slurryInjectors, slurryExtractors,
+                overclockCount
+        );
     }
 
     public CompoundTag serializeNBT() {

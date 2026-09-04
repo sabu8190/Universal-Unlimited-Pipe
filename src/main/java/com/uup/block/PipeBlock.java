@@ -1,6 +1,7 @@
 package com.uup.block;
 
 import com.uup.blockentity.PipeBlockEntity;
+import com.uup.core.transfer.GasTransferExecutor;
 import com.uup.setup.ModBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -113,9 +114,13 @@ public class PipeBlock extends Block implements EntityBlock {
             if (this.type == PipeType.ITEM) {
                 return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent();
             }
+            if (this.type == PipeType.GAS) {
+                return GasTransferExecutor.canConnectGas(be, opposite);
+            }
             return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
                     || be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
-                    || be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent();
+                    || be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                    || GasTransferExecutor.canConnectGas(be, opposite);
         }
         return false;
     }
