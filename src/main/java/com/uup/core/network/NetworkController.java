@@ -197,39 +197,8 @@ public class NetworkController {
 
         Set<BlockPos> handledPositions = new HashSet<>();
 
-        // 1. Process configured wireless nodes (Registered via Network Upgrade cards only)
-        // Check for broken wireless remote target blocks, drop reset card and remove node
-        Iterator<TransferNode> it = configuredNodes.iterator();
-        while (it.hasNext()) {
-            TransferNode node = it.next();
-            if (node.isWirelessRemote()) {
-                BlockPos targetPos = node.getPos();
-                ServerLevel targetLevel = (level.getServer() != null && node.getDimension() != null)
-                        ? level.getServer().getLevel(node.getDimension())
-                        : level;
-                if (targetLevel != null && targetLevel.isLoaded(targetPos)) {
-                    if (targetLevel.getBlockState(targetPos).isAir()) {
-                        Containers.dropItemStack(
-                                targetLevel,
-                                targetPos.getX() + 0.5,
-                                targetPos.getY() + 0.5,
-                                targetPos.getZ() + 0.5,
-                                new ItemStack(ModItems.NETWORK_CARD.get())
-                        );
-                        UUPLogger.info(String.format("Wireless target block at %s was broken! Dropped Network Card and reset coordinate.", targetPos.toShortString()));
-                        it.remove();
-                        networkDirty = true;
-                    }
-                }
-            }
-        }
-
-        List<TransferNode> allActiveNodes = new ArrayList<>();
-        for (TransferNode node : configuredNodes) {
-            if (node.isWirelessRemote()) {
-                allActiveNodes.add(node);
-            }
-        }
+        // 1. Process configured wireless nodes and connected nodes
+        List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
 
         // Process physically connected wired transfer nodes (Must be adjacent to a pipe in cachedPipes)
         for (BlockPos nodePos : scannedNodePositions) {
@@ -264,9 +233,9 @@ public class NetworkController {
             totalNodeOverclocks = Math.max(totalNodeOverclocks, node.getOverclocks());
         }
 
+        List<TransferNode> brokenWirelessNodes = null;
+
         for (TransferNode node : allActiveNodes) {
-            if (node.getMode() == TransferMode.DISABLED) continue;
-            
             BlockPos targetPos = node.isWirelessRemote() ? node.getPos() : node.getPos().relative(node.getTargetSide());
             ServerLevel targetLevel = (node.isWirelessRemote() && level.getServer() != null && node.getDimension() != null)
                     ? level.getServer().getLevel(node.getDimension())
@@ -274,7 +243,25 @@ public class NetworkController {
             if (targetLevel == null || !targetLevel.isLoaded(targetPos)) continue;
 
             BlockEntity be = targetLevel.getBlockEntity(targetPos);
-            if (be == null) continue;
+
+            // On-demand detection: if target machine is missing/destroyed for a wireless node
+            if (node.isWirelessRemote() && (be == null || targetLevel.getBlockState(targetPos).isAir())) {
+                Containers.dropItemStack(
+                        targetLevel,
+                        targetPos.getX() + 0.5,
+                        targetPos.getY() + 0.5,
+                        targetPos.getZ() + 0.5,
+                        new ItemStack(ModItems.NETWORK_CARD.get())
+                );
+                UUPLogger.info(String.format("Wireless target block at %s was destroyed! Dropped reset Network Card and removed node.", targetPos.toShortString()));
+                if (brokenWirelessNodes == null) {
+                    brokenWirelessNodes = new ArrayList<>();
+                }
+                brokenWirelessNodes.add(node);
+                continue;
+            }
+
+            if (be == null || node.getMode() == TransferMode.DISABLED) continue;
 
             handledPositions.add(targetPos);
             Direction side = node.getTargetSide().getOpposite();
@@ -299,6 +286,11 @@ public class NetworkController {
                     pigmentInjectors, pigmentExtractors,
                     slurryInjectors, slurryExtractors
             );
+        }
+
+        if (brokenWirelessNodes != null) {
+            configuredNodes.removeAll(brokenWirelessNodes);
+            networkDirty = true;
         }
 
         // 2. Process Direct Pipe Connections
