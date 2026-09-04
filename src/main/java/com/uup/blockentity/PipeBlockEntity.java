@@ -104,7 +104,7 @@ public class PipeBlockEntity extends BlockEntity {
         return new MenuProvider() {
             @Override
             public Component getDisplayName() {
-                return Component.literal("Pipe Interface (" + side.getName().toUpperCase() + ")");
+                return Component.literal("接続設定 (" + side.getName().toUpperCase() + ")");
             }
 
             @Nullable

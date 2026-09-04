@@ -32,7 +32,7 @@ public class NodeScreen extends AbstractContainerScreen<NodeMenu> {
         int top = this.topPos;
 
         // Mode Button (Top-Left)
-        modeButton = addRenderableWidget(Button.builder(Component.literal("Mode"), btn -> {
+        modeButton = addRenderableWidget(Button.builder(Component.literal("モード"), btn -> {
             if (this.minecraft != null && this.minecraft.gameMode != null) {
                 this.minecraft.gameMode.handleInventoryButtonClick(this.menu.containerId, 4);
             }
@@ -67,10 +67,10 @@ public class NodeScreen extends AbstractContainerScreen<NodeMenu> {
         super.containerTick();
         TransferMode mode = menu.getMode();
         String modeColor = switch (mode) {
-            case EXTRACT -> "§cEXTRACT";
-            case INSERT -> "§9INSERT";
-            case BOTH -> "§aBOTH";
-            case DISABLED -> "§7DISABLED";
+            case EXTRACT -> "§c搬出";
+            case INSERT -> "§9搬入";
+            case BOTH -> "§a両方";
+            case DISABLED -> "§7無効";
         };
         modeButton.setMessage(Component.literal(modeColor));
         channelButton.setMessage(Component.literal("§6Ch: " + menu.getChannelId()));
@@ -117,11 +117,11 @@ public class NodeScreen extends AbstractContainerScreen<NodeMenu> {
         guiGraphics.drawString(this.font, this.title, this.titleLabelX, 6, 0x404040, false);
         
         // Upgrade slot label
-        guiGraphics.drawCenteredString(this.font, "§8Upgrade", 89, 25, 0x555555);
+        guiGraphics.drawCenteredString(this.font, "§8強化", 89, 25, 0x555555);
 
         // Priority text
         int prio = menu.getPriority();
-        String prioText = "§1Prio: " + (prio >= 0 ? "+" + prio : prio);
+        String prioText = "§1優先度: " + (prio >= 0 ? "+" + prio : prio);
         guiGraphics.drawCenteredString(this.font, prioText, 89, 60, 0x222222);
 
         guiGraphics.drawString(this.font, this.playerInventoryTitle, this.inventoryLabelX, this.inventoryLabelY, 0x404040, false);
