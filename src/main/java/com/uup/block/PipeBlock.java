@@ -1,6 +1,7 @@
 package com.uup.block;
 
 import com.uup.blockentity.PipeBlockEntity;
+import com.uup.core.transfer.EnergyTransferExecutor;
 import com.uup.core.transfer.GasTransferExecutor;
 import com.uup.setup.ModBlocks;
 import net.minecraft.core.BlockPos;
@@ -106,7 +107,8 @@ public class PipeBlock extends Block implements EntityBlock {
         if (be != null) {
             Direction opposite = direction.getOpposite();
             if (this.type == PipeType.ENERGY) {
-                return be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent();
+                return be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                        || EnergyTransferExecutor.canConnectStrictEnergy(be, opposite);
             }
             if (this.type == PipeType.FLUID) {
                 return be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent();
@@ -120,6 +122,7 @@ public class PipeBlock extends Block implements EntityBlock {
             return be.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
                     || be.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
                     || be.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                    || EnergyTransferExecutor.canConnectStrictEnergy(be, opposite)
                     || GasTransferExecutor.canConnectGas(be, opposite);
         }
         return false;

@@ -84,4 +84,65 @@ public class EnergyTransferExecutor {
             executeTransfer(source, target, overclocks, "Network_Source", "UUP_Controller_Energy_Buffer");
         }
     }
+
+    public static boolean canConnectStrictEnergy(net.minecraft.world.level.block.entity.BlockEntity be, net.minecraft.core.Direction side) {
+        if (!GasTransferExecutor.isMekanismLoaded() || be == null) return false;
+        try {
+            return MekanismEnergyTransfer.hasStrictEnergyCapability(be, side);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public static void collectMekanismCapabilities(
+            net.minecraft.world.level.block.entity.BlockEntity be,
+            net.minecraft.core.Direction side,
+            boolean isInsert,
+            boolean isExtract,
+            List<Object> injectors,
+            List<Object> extractors
+    ) {
+        if (!GasTransferExecutor.isMekanismLoaded() || be == null) return;
+        try {
+            MekanismEnergyTransfer.collectCapabilities(be, side, isInsert, isExtract, injectors, extractors);
+        } catch (Throwable t) {
+            UUPLogger.error("Error collecting Mekanism Strict Energy capability: ", t);
+        }
+    }
+
+    public static void executeMekanismTransfers(List<Object> extractors, List<Object> injectors, int overclocks) {
+        if (!GasTransferExecutor.isMekanismLoaded() || extractors == null || injectors == null) return;
+        try {
+            MekanismEnergyTransfer.processTransfers(extractors, injectors, overclocks);
+        } catch (Throwable t) {
+            UUPLogger.error("Error executing Mekanism Strict Energy transfers: ", t);
+        }
+    }
+
+    public static void dispatchMekanismBuffer(Object buffer, List<Object> injectors, int overclocks) {
+        if (!GasTransferExecutor.isMekanismLoaded() || buffer == null || injectors == null || injectors.isEmpty()) return;
+        try {
+            if (buffer instanceof MekanismChemicalTransfer.MekanismBuffer mb) {
+                MekanismEnergyTransfer.executeTransfer(mb.energyHandler, injectors, overclocks);
+            }
+        } catch (Throwable t) {
+            UUPLogger.error("Error dispatching Mekanism Energy buffer: ", t);
+        }
+    }
+
+    public static void ingestMekanismBuffer(Object buffer, List<Object> extractors, int overclocks) {
+        if (!GasTransferExecutor.isMekanismLoaded() || buffer == null || extractors == null || extractors.isEmpty()) return;
+        try {
+            if (buffer instanceof MekanismChemicalTransfer.MekanismBuffer mb) {
+                List<Object> target = List.of(mb.energyHandler);
+                for (Object ext : extractors) {
+                    if (ext instanceof mekanism.api.energy.IStrictEnergyHandler source) {
+                        MekanismEnergyTransfer.executeTransfer(source, target, overclocks);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            UUPLogger.error("Error ingesting Mekanism Energy buffer: ", t);
+        }
+    }
 }

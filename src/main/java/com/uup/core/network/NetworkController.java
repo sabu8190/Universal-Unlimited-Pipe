@@ -156,6 +156,9 @@ public class NetworkController {
         List<IEnergyStorage> energyInjectors = new ArrayList<>();
         List<IEnergyStorage> energyExtractors = new ArrayList<>();
 
+        List<Object> mekEnergyInjectors = new ArrayList<>();
+        List<Object> mekEnergyExtractors = new ArrayList<>();
+
         List<Object> gasInjectors = new ArrayList<>();
         List<Object> gasExtractors = new ArrayList<>();
         List<Object> infuseInjectors = new ArrayList<>();
@@ -231,6 +234,12 @@ public class NetworkController {
                 if (canExtract && !energyExtractors.contains(handler)) energyExtractors.add(handler);
             });
 
+            EnergyTransferExecutor.collectMekanismCapabilities(
+                    be, side,
+                    canInsert, canExtract,
+                    mekEnergyInjectors, mekEnergyExtractors
+            );
+
             GasTransferExecutor.collectCapabilities(
                     be, side,
                     canInsert, canExtract,
@@ -282,6 +291,11 @@ public class NetworkController {
                         if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
                         if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
                     });
+                    EnergyTransferExecutor.collectMekanismCapabilities(
+                            be, side,
+                            true, true,
+                            mekEnergyInjectors, mekEnergyExtractors
+                    );
                 }
 
                 // Gas & Chemical transfer
@@ -329,6 +343,12 @@ public class NetworkController {
                     if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
                 });
 
+                EnergyTransferExecutor.collectMekanismCapabilities(
+                        be, side,
+                        true, true,
+                        mekEnergyInjectors, mekEnergyExtractors
+                );
+
                 GasTransferExecutor.collectCapabilities(
                         be, side,
                         true, true,
@@ -348,12 +368,14 @@ public class NetworkController {
             ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, effectiveOverclocks);
             FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, effectiveOverclocks);
             EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, effectiveOverclocks);
+            EnergyTransferExecutor.dispatchMekanismBuffer(directBuffer.getMekanismBuffer(), mekEnergyInjectors, effectiveOverclocks);
             GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), gasInjectors, infuseInjectors, pigmentInjectors, slurryInjectors, effectiveOverclocks);
 
             // Ingest network extraction sources -> internal buffer
             ItemTransferExecutor.ingestToInternalBuffer(directBuffer, itemExtractors, effectiveOverclocks);
             FluidTransferExecutor.ingestToInternalBuffer(directBuffer, fluidExtractors, effectiveOverclocks);
             EnergyTransferExecutor.ingestToInternalBuffer(directBuffer, energyExtractors, effectiveOverclocks);
+            EnergyTransferExecutor.ingestMekanismBuffer(directBuffer.getMekanismBuffer(), mekEnergyExtractors, effectiveOverclocks);
             GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, effectiveOverclocks);
         }
 
@@ -367,6 +389,7 @@ public class NetworkController {
         for (IEnergyStorage extractor : energyExtractors) {
             EnergyTransferExecutor.executeTransfer(extractor, energyInjectors, effectiveOverclocks, "UUP_Energy_Extract", "UUP_Energy_Insert");
         }
+        EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);
         GasTransferExecutor.executeAllTransfers(
                 gasInjectors, gasExtractors,
                 infuseInjectors, infuseExtractors,

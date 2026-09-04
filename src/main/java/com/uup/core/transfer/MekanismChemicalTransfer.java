@@ -249,16 +249,37 @@ public class MekanismChemicalTransfer {
             }
         };
 
+        public final mekanism.common.capabilities.energy.BasicEnergyContainer energyContainer =
+                mekanism.common.capabilities.energy.BasicEnergyContainer.create(mekanism.api.math.FloatingLong.MAX_VALUE,
+                        mekanism.common.capabilities.energy.BasicEnergyContainer.alwaysTrue,
+                        mekanism.common.capabilities.energy.BasicEnergyContainer.alwaysTrue, null);
+
+        public final mekanism.api.energy.IStrictEnergyHandler energyHandler = new mekanism.api.energy.IStrictEnergyHandler() {
+            @Override public int getEnergyContainerCount() { return 1; }
+            @Override public mekanism.api.math.FloatingLong getEnergy(int container) { return container == 0 ? energyContainer.getEnergy() : mekanism.api.math.FloatingLong.ZERO; }
+            @Override public void setEnergy(int container, mekanism.api.math.FloatingLong energy) { if (container == 0) energyContainer.setEnergy(energy); }
+            @Override public mekanism.api.math.FloatingLong getMaxEnergy(int container) { return container == 0 ? energyContainer.getMaxEnergy() : mekanism.api.math.FloatingLong.ZERO; }
+            @Override public mekanism.api.math.FloatingLong getNeededEnergy(int container) { return container == 0 ? energyContainer.getNeeded() : mekanism.api.math.FloatingLong.ZERO; }
+            @Override public mekanism.api.math.FloatingLong insertEnergy(int container, mekanism.api.math.FloatingLong amount, Action action) {
+                return container == 0 ? energyContainer.insert(amount, action, mekanism.api.AutomationType.EXTERNAL) : amount;
+            }
+            @Override public mekanism.api.math.FloatingLong extractEnergy(int container, mekanism.api.math.FloatingLong amount, Action action) {
+                return container == 0 ? energyContainer.extract(amount, action, mekanism.api.AutomationType.EXTERNAL) : mekanism.api.math.FloatingLong.ZERO;
+            }
+        };
+
         public final net.minecraftforge.common.util.LazyOptional<IGasHandler> gasOpt = net.minecraftforge.common.util.LazyOptional.of(() -> gasHandler);
         public final net.minecraftforge.common.util.LazyOptional<IInfusionHandler> infusionOpt = net.minecraftforge.common.util.LazyOptional.of(() -> infusionHandler);
         public final net.minecraftforge.common.util.LazyOptional<IPigmentHandler> pigmentOpt = net.minecraftforge.common.util.LazyOptional.of(() -> pigmentHandler);
         public final net.minecraftforge.common.util.LazyOptional<ISlurryHandler> slurryOpt = net.minecraftforge.common.util.LazyOptional.of(() -> slurryHandler);
+        public final net.minecraftforge.common.util.LazyOptional<mekanism.api.energy.IStrictEnergyHandler> energyOpt = net.minecraftforge.common.util.LazyOptional.of(() -> energyHandler);
 
         public void invalidate() {
             gasOpt.invalidate();
             infusionOpt.invalidate();
             pigmentOpt.invalidate();
             slurryOpt.invalidate();
+            energyOpt.invalidate();
         }
 
         public net.minecraft.nbt.CompoundTag serializeNBT() {
@@ -267,6 +288,7 @@ public class MekanismChemicalTransfer {
             tag.put("Infusion", infusionTank.serializeNBT());
             tag.put("Pigment", pigmentTank.serializeNBT());
             tag.put("Slurry", slurryTank.serializeNBT());
+            tag.put("Energy", energyContainer.serializeNBT());
             return tag;
         }
 
@@ -275,6 +297,7 @@ public class MekanismChemicalTransfer {
             if (tag.contains("Infusion")) infusionTank.deserializeNBT(tag.getCompound("Infusion"));
             if (tag.contains("Pigment")) pigmentTank.deserializeNBT(tag.getCompound("Pigment"));
             if (tag.contains("Slurry")) slurryTank.deserializeNBT(tag.getCompound("Slurry"));
+            if (tag.contains("Energy")) energyContainer.deserializeNBT(tag.getCompound("Energy"));
         }
 
         @SuppressWarnings("unchecked")
@@ -283,6 +306,7 @@ public class MekanismChemicalTransfer {
             if (cap == Capabilities.INFUSION_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) infusionOpt;
             if (cap == Capabilities.PIGMENT_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) pigmentOpt;
             if (cap == Capabilities.SLURRY_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) slurryOpt;
+            if (cap == Capabilities.STRICT_ENERGY) return (net.minecraftforge.common.util.LazyOptional<T>) energyOpt;
             return net.minecraftforge.common.util.LazyOptional.empty();
         }
     }
