@@ -37,7 +37,7 @@ public class PipeBlockEntity extends BlockEntity {
     public PipeBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.PIPE.get(), pos, state);
         for (int i = 0; i < 6; i++) {
-            modes[i] = TransferMode.EXTRACT;
+            modes[i] = TransferMode.BOTH;
             priorities[i] = 0;
             channels[i] = 0;
             upgradeHandlers[i] = new ItemStackHandler(1) {

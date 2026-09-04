@@ -25,7 +25,7 @@ import org.jetbrains.annotations.Nullable;
 
 public class NodeBlockEntity extends BlockEntity implements MenuProvider {
 
-    private TransferMode mode = TransferMode.EXTRACT;
+    private TransferMode mode = TransferMode.BOTH;
     private int priority = 0;
     private int channelId = 0;
 
