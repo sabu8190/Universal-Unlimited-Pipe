@@ -15,7 +15,8 @@ public class MekanismEnergyTransfer {
 
     public static boolean hasStrictEnergyCapability(BlockEntity be, Direction side) {
         if (be == null) return false;
-        return be.getCapability(Capabilities.STRICT_ENERGY, side).isPresent();
+        return be.getCapability(Capabilities.STRICT_ENERGY, side).isPresent()
+                || (side != null && be.getCapability(Capabilities.STRICT_ENERGY, null).isPresent());
     }
 
     public static void collectCapabilities(
@@ -27,10 +28,18 @@ public class MekanismEnergyTransfer {
             List<Object> extractors
     ) {
         if (be == null) return;
-        be.getCapability(Capabilities.STRICT_ENERGY, side).ifPresent(handler -> {
-            if (isInsert && !injectors.contains(handler)) injectors.add(handler);
-            if (isExtract && !extractors.contains(handler)) extractors.add(handler);
-        });
+        var opt = be.getCapability(Capabilities.STRICT_ENERGY, side);
+        if (opt.isPresent()) {
+            opt.ifPresent(handler -> {
+                if (isInsert && !injectors.contains(handler)) injectors.add(handler);
+                if (isExtract && !extractors.contains(handler)) extractors.add(handler);
+            });
+        } else if (side != null) {
+            be.getCapability(Capabilities.STRICT_ENERGY, null).ifPresent(handler -> {
+                if (isInsert && !injectors.contains(handler)) injectors.add(handler);
+                if (isExtract && !extractors.contains(handler)) extractors.add(handler);
+            });
+        }
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

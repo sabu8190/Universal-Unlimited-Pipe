@@ -22,7 +22,35 @@ public class MekanismChemicalTransfer {
         return be.getCapability(Capabilities.GAS_HANDLER, side).isPresent()
                 || be.getCapability(Capabilities.INFUSION_HANDLER, side).isPresent()
                 || be.getCapability(Capabilities.PIGMENT_HANDLER, side).isPresent()
-                || be.getCapability(Capabilities.SLURRY_HANDLER, side).isPresent();
+                || be.getCapability(Capabilities.SLURRY_HANDLER, side).isPresent()
+                || (side != null && (
+                        be.getCapability(Capabilities.GAS_HANDLER, null).isPresent()
+                        || be.getCapability(Capabilities.INFUSION_HANDLER, null).isPresent()
+                        || be.getCapability(Capabilities.PIGMENT_HANDLER, null).isPresent()
+                        || be.getCapability(Capabilities.SLURRY_HANDLER, null).isPresent()));
+    }
+
+    private static <T> void addCapability(
+            BlockEntity be,
+            net.minecraftforge.common.capabilities.Capability<T> cap,
+            Direction side,
+            boolean isInsert,
+            boolean isExtract,
+            List<Object> injList,
+            List<Object> extList
+    ) {
+        var opt = be.getCapability(cap, side);
+        if (opt.isPresent()) {
+            opt.ifPresent(h -> {
+                if (isInsert && !injList.contains(h)) injList.add(h);
+                if (isExtract && !extList.contains(h)) extList.add(h);
+            });
+        } else if (side != null) {
+            be.getCapability(cap, null).ifPresent(h -> {
+                if (isInsert && !injList.contains(h)) injList.add(h);
+                if (isExtract && !extList.contains(h)) extList.add(h);
+            });
+        }
     }
 
     public static void collectCapabilities(
@@ -36,26 +64,10 @@ public class MekanismChemicalTransfer {
             List<Object> sluInj, List<Object> sluExt
     ) {
         if (be == null) return;
-
-        be.getCapability(Capabilities.GAS_HANDLER, side).ifPresent(h -> {
-            if (isInsert && !gasInj.contains(h)) gasInj.add(h);
-            if (isExtract && !gasExt.contains(h)) gasExt.add(h);
-        });
-
-        be.getCapability(Capabilities.INFUSION_HANDLER, side).ifPresent(h -> {
-            if (isInsert && !infInj.contains(h)) infInj.add(h);
-            if (isExtract && !infExt.contains(h)) infExt.add(h);
-        });
-
-        be.getCapability(Capabilities.PIGMENT_HANDLER, side).ifPresent(h -> {
-            if (isInsert && !pigInj.contains(h)) pigInj.add(h);
-            if (isExtract && !pigExt.contains(h)) pigExt.add(h);
-        });
-
-        be.getCapability(Capabilities.SLURRY_HANDLER, side).ifPresent(h -> {
-            if (isInsert && !sluInj.contains(h)) sluInj.add(h);
-            if (isExtract && !sluExt.contains(h)) sluExt.add(h);
-        });
+        addCapability(be, Capabilities.GAS_HANDLER, side, isInsert, isExtract, gasInj, gasExt);
+        addCapability(be, Capabilities.INFUSION_HANDLER, side, isInsert, isExtract, infInj, infExt);
+        addCapability(be, Capabilities.PIGMENT_HANDLER, side, isInsert, isExtract, pigInj, pigExt);
+        addCapability(be, Capabilities.SLURRY_HANDLER, side, isInsert, isExtract, sluInj, sluExt);
     }
 
     @SuppressWarnings("unchecked")

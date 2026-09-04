@@ -2,19 +2,19 @@
     "textures": {
         "side": "uup:block/pipe_side",
         "connect": "uup:block/pipe_connect",
-        "particle": "uup:block/pipe_connect"
+        "particle": "uup:block/pipe_side"
     },
     "elements": [
         {
             "from": [4, 4, 4],
             "to": [12, 12, 12],
             "faces": {
-                "down":  { "texture": "#connect", "uv": [4, 4, 12, 12] },
-                "up":    { "texture": "#connect", "uv": [4, 4, 12, 12] },
-                "north": { "texture": "#connect", "uv": [4, 4, 12, 12] },
-                "south": { "texture": "#connect", "uv": [4, 4, 12, 12] },
-                "west":  { "texture": "#connect", "uv": [4, 4, 12, 12] },
-                "east":  { "texture": "#connect", "uv": [4, 4, 12, 12] }
+                "down":  { "texture": "#side", "uv": [4, 4, 12, 12] },
+                "up":    { "texture": "#side", "uv": [4, 4, 12, 12] },
+                "north": { "texture": "#side", "uv": [4, 4, 12, 12] },
+                "south": { "texture": "#side", "uv": [4, 4, 12, 12] },
+                "west":  { "texture": "#side", "uv": [4, 4, 12, 12] },
+                "east":  { "texture": "#side", "uv": [4, 4, 12, 12] }
             }
         }
     ]

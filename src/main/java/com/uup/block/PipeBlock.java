@@ -177,12 +177,7 @@ public class PipeBlock extends Block implements EntityBlock {
         }
         BlockEntity neighborBE = level.getBlockEntity(neighbor);
         if (neighborBE == null) return false;
-        Direction opposite = dir.getOpposite();
-        return neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
-                || neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
-                || neighborBE.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
-                || EnergyTransferExecutor.canConnectStrictEnergy(neighborBE, opposite)
-                || GasTransferExecutor.canConnectGas(neighborBE, opposite);
+        return canConnectTo(level, pos, dir);
     }
 
     @Override
@@ -197,37 +192,65 @@ public class PipeBlock extends Block implements EntityBlock {
         if (!level.isClientSide && hand == net.minecraft.world.InteractionHand.MAIN_HAND) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof PipeBlockEntity pipeBE && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-                Direction clickedSide = hit.getDirection();
+                java.util.List<Direction> connectedSides = new java.util.ArrayList<>();
+                for (Direction dir : Direction.values()) {
+                    if (state.getValue(DIRECTION_PROPERTIES.get(dir)) && isConnectedToMachine(level, pos, dir)) {
+                        connectedSides.add(dir);
+                    }
+                }
+
+                if (connectedSides.isEmpty()) {
+                    return net.minecraft.world.InteractionResult.PASS;
+                }
+
                 Direction targetSide = null;
 
-                // 1. Check if the clicked face itself connects to a machine/tank
-                if (isConnectedToMachine(level, pos, clickedSide)) {
-                    targetSide = clickedSide;
-                } else {
-                    // 2. If clicked side doesn't have a machine, check if only 1 machine attached
-                    java.util.List<Direction> connectedSides = new java.util.ArrayList<>();
-                    for (Direction dir : Direction.values()) {
-                        if (isConnectedToMachine(level, pos, dir)) {
-                            connectedSides.add(dir);
-                        }
-                    }
-                    if (connectedSides.size() == 1) {
-                        targetSide = connectedSides.get(0);
+                // 1. Check hit position offset from pipe center to determine clicked arm/side
+                net.minecraft.world.phys.Vec3 hitVec = hit.getLocation();
+                double dx = hitVec.x - (pos.getX() + 0.5);
+                double dy = hitVec.y - (pos.getY() + 0.5);
+                double dz = hitVec.z - (pos.getZ() + 0.5);
+
+                double absX = Math.abs(dx);
+                double absY = Math.abs(dy);
+                double absZ = Math.abs(dz);
+
+                Direction dominantDir = null;
+                if (absX >= absY && absX >= absZ && absX > 0.2) {
+                    dominantDir = dx > 0 ? Direction.EAST : Direction.WEST;
+                } else if (absY >= absX && absY >= absZ && absY > 0.2) {
+                    dominantDir = dy > 0 ? Direction.UP : Direction.DOWN;
+                } else if (absZ >= absX && absZ >= absY && absZ > 0.2) {
+                    dominantDir = dz > 0 ? Direction.SOUTH : Direction.NORTH;
+                }
+
+                if (dominantDir != null && connectedSides.contains(dominantDir)) {
+                    targetSide = dominantDir;
+                }
+
+                // 2. Check clicked face
+                if (targetSide == null) {
+                    Direction clickedSide = hit.getDirection();
+                    if (connectedSides.contains(clickedSide)) {
+                        targetSide = clickedSide;
                     }
                 }
 
-                if (targetSide != null) {
-                    final Direction finalSide = targetSide;
-                    net.minecraftforge.network.NetworkHooks.openScreen(
-                            serverPlayer,
-                            pipeBE.getMenuProvider(finalSide),
-                            buf -> {
-                                buf.writeBlockPos(pos);
-                                buf.writeEnum(finalSide);
-                            }
-                    );
-                    return net.minecraft.world.InteractionResult.SUCCESS;
+                // 3. Fallback to single or first connected side
+                if (targetSide == null) {
+                    targetSide = connectedSides.get(0);
                 }
+
+                final Direction finalSide = targetSide;
+                net.minecraftforge.network.NetworkHooks.openScreen(
+                        serverPlayer,
+                        pipeBE.getMenuProvider(finalSide),
+                        buf -> {
+                            buf.writeBlockPos(pos);
+                            buf.writeEnum(finalSide);
+                        }
+                );
+                return net.minecraft.world.InteractionResult.SUCCESS;
             }
         }
         return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
