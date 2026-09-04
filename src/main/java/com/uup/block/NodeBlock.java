@@ -15,6 +15,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,12 +23,13 @@ public class NodeBlock extends Block implements EntityBlock {
 
     public static final DirectionProperty FACING = DirectionalBlock.FACING;
 
-    private static final VoxelShape NORTH_SHAPE = Block.box(0.0, 0.0, 0.0, 16.0, 16.0, 3.0);
-    private static final VoxelShape SOUTH_SHAPE = Block.box(0.0, 0.0, 13.0, 16.0, 16.0, 16.0);
-    private static final VoxelShape WEST_SHAPE  = Block.box(0.0, 0.0, 0.0, 3.0, 16.0, 16.0);
-    private static final VoxelShape EAST_SHAPE  = Block.box(13.0, 0.0, 0.0, 16.0, 16.0, 16.0);
-    private static final VoxelShape DOWN_SHAPE  = Block.box(0.0, 0.0, 0.0, 16.0, 3.0, 16.0);
-    private static final VoxelShape UP_SHAPE    = Block.box(0.0, 13.0, 0.0, 16.0, 16.0, 16.0);
+    private static final VoxelShape NORTH_SHAPE = Shapes.or(Block.box(0.0, 0.0, 0.0, 16.0, 16.0, 3.0), Block.box(4.0, 4.0, 3.0, 12.0, 12.0, 16.0));
+    private static final VoxelShape SOUTH_SHAPE = Shapes.or(Block.box(0.0, 0.0, 13.0, 16.0, 16.0, 16.0), Block.box(4.0, 4.0, 0.0, 12.0, 12.0, 13.0));
+    private static final VoxelShape WEST_SHAPE  = Shapes.or(Block.box(0.0, 0.0, 0.0, 3.0, 16.0, 16.0), Block.box(3.0, 4.0, 4.0, 16.0, 12.0, 12.0));
+    private static final VoxelShape EAST_SHAPE  = Shapes.or(Block.box(13.0, 0.0, 0.0, 16.0, 16.0, 16.0), Block.box(0.0, 4.0, 4.0, 13.0, 12.0, 12.0));
+    private static final VoxelShape DOWN_SHAPE  = Shapes.or(Block.box(0.0, 0.0, 0.0, 16.0, 3.0, 16.0), Block.box(4.0, 3.0, 4.0, 12.0, 16.0, 12.0));
+    private static final VoxelShape UP_SHAPE    = Shapes.or(Block.box(0.0, 13.0, 0.0, 16.0, 16.0, 16.0), Block.box(4.0, 0.0, 4.0, 12.0, 13.0, 12.0));
+
 
     public NodeBlock() {
         super(Properties.of()
