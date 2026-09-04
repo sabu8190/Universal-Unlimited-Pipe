@@ -6,6 +6,7 @@ import com.uup.setup.ModBlockEntities;
 import com.uup.setup.ModBlocks;
 import com.uup.setup.ModCreativeTabs;
 import com.uup.setup.ModItems;
+import com.uup.setup.ModMenus;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.common.Mod;
@@ -25,6 +26,7 @@ public class UniversalUnlimitedPipe {
         ModBlocks.register(modEventBus);
         ModItems.register(modEventBus);
         ModBlockEntities.register(modEventBus);
+        ModMenus.register(modEventBus);
         ModCreativeTabs.register(modEventBus);
 
         modEventBus.addListener(this::commonSetup);

@@ -63,6 +63,31 @@ public class NodeBlock extends Block implements EntityBlock {
         };
     }
 
+    @Override
+    public net.minecraft.world.InteractionResult use(
+            BlockState state,
+            Level level,
+            BlockPos pos,
+            net.minecraft.world.entity.player.Player player,
+            net.minecraft.world.InteractionHand hand,
+            net.minecraft.world.phys.BlockHitResult hit
+    ) {
+        if (!level.isClientSide) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof NodeBlockEntity nodeBE && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                net.minecraftforge.network.NetworkHooks.openScreen(
+                        serverPlayer,
+                        nodeBE,
+                        buf -> {
+                            buf.writeBlockPos(pos);
+                            buf.writeEnum(nodeBE.getAttachedFacing());
+                        }
+                );
+            }
+        }
+        return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
+    }
+
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {

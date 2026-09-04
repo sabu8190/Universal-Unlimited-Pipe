@@ -2,6 +2,7 @@ package com.uup.core.network;
 
 import com.uup.block.PipeBlock;
 import com.uup.blockentity.NodeBlockEntity;
+import com.uup.blockentity.PipeBlockEntity;
 import com.uup.config.ModConfig;
 import com.uup.core.transfer.EnergyTransferExecutor;
 import com.uup.core.transfer.FluidTransferExecutor;
@@ -166,7 +167,7 @@ public class NetworkController {
 
         Set<BlockPos> handledPositions = new HashSet<>();
 
-        // 1. Process configured nodes (Manual / Wireless Cards / Attached Node blocks)
+        // 1. Process configured nodes (Manual / Wireless Cards / Attached Node blocks / Pipe Side Settings)
         List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
 
         for (BlockPos nodePos : scannedNodePositions) {
@@ -176,6 +177,29 @@ public class NetworkController {
                     allActiveNodes.add(nodeBE.toNodeData());
                 }
             }
+        }
+
+        // Collect configured side nodes from PipeBlockEntities
+        for (BlockPos pipePos : cachedPipes) {
+            if (level.isLoaded(pipePos)) {
+                BlockEntity be = level.getBlockEntity(pipePos);
+                if (be instanceof PipeBlockEntity pipeBE) {
+                    for (Direction dir : Direction.values()) {
+                        BlockPos adj = pipePos.relative(dir);
+                        if (!cachedPipes.contains(adj) && !foundControllers.contains(adj)) {
+                            allActiveNodes.add(pipeBE.toNodeData(dir));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort nodes by Priority descending (Higher priority processed first)
+        allActiveNodes.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
+
+        int totalNodeOverclocks = overclockCount;
+        for (TransferNode node : allActiveNodes) {
+            totalNodeOverclocks = Math.max(totalNodeOverclocks, node.getOverclocks());
         }
 
         for (TransferNode node : allActiveNodes) {
@@ -316,37 +340,39 @@ public class NetworkController {
             }
         }
 
+        int effectiveOverclocks = Math.max(overclockCount, totalNodeOverclocks);
+
         // 3. Controller Internal Buffer Transfer (Dispatch & Ingest for all resources)
         if (!foundControllers.isEmpty()) {
             // Dispatch internal buffer -> network injection targets
-            ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, overclockCount);
-            FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, overclockCount);
-            EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, overclockCount);
-            GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), gasInjectors, infuseInjectors, pigmentInjectors, slurryInjectors, overclockCount);
+            ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, effectiveOverclocks);
+            FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, effectiveOverclocks);
+            EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, effectiveOverclocks);
+            GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), gasInjectors, infuseInjectors, pigmentInjectors, slurryInjectors, effectiveOverclocks);
 
             // Ingest network extraction sources -> internal buffer
-            ItemTransferExecutor.ingestToInternalBuffer(directBuffer, itemExtractors, overclockCount);
-            FluidTransferExecutor.ingestToInternalBuffer(directBuffer, fluidExtractors, overclockCount);
-            EnergyTransferExecutor.ingestToInternalBuffer(directBuffer, energyExtractors, overclockCount);
-            GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, overclockCount);
+            ItemTransferExecutor.ingestToInternalBuffer(directBuffer, itemExtractors, effectiveOverclocks);
+            FluidTransferExecutor.ingestToInternalBuffer(directBuffer, fluidExtractors, effectiveOverclocks);
+            EnergyTransferExecutor.ingestToInternalBuffer(directBuffer, energyExtractors, effectiveOverclocks);
+            GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, effectiveOverclocks);
         }
 
         // 4. Execute transfers between extractors and injectors
         for (IItemHandler extractor : itemExtractors) {
-            ItemTransferExecutor.executeTransfer(extractor, itemInjectors, overclockCount, "UUP_Extract", "UUP_Insert");
+            ItemTransferExecutor.executeTransfer(extractor, itemInjectors, effectiveOverclocks, "UUP_Extract", "UUP_Insert");
         }
         for (IFluidHandler extractor : fluidExtractors) {
-            FluidTransferExecutor.executeTransfer(extractor, fluidInjectors, overclockCount, "UUP_Fluid_Extract", "UUP_Fluid_Insert");
+            FluidTransferExecutor.executeTransfer(extractor, fluidInjectors, effectiveOverclocks, "UUP_Fluid_Extract", "UUP_Fluid_Insert");
         }
         for (IEnergyStorage extractor : energyExtractors) {
-            EnergyTransferExecutor.executeTransfer(extractor, energyInjectors, overclockCount, "UUP_Energy_Extract", "UUP_Energy_Insert");
+            EnergyTransferExecutor.executeTransfer(extractor, energyInjectors, effectiveOverclocks, "UUP_Energy_Extract", "UUP_Energy_Insert");
         }
         GasTransferExecutor.executeAllTransfers(
                 gasInjectors, gasExtractors,
                 infuseInjectors, infuseExtractors,
                 pigmentInjectors, pigmentExtractors,
                 slurryInjectors, slurryExtractors,
-                overclockCount
+                effectiveOverclocks
         );
     }
 

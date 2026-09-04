@@ -58,9 +58,12 @@ public class ControllerBlockEntity extends BlockEntity {
             );
             network.addNode(remoteNode);
             setChanged();
-            player.sendSystemMessage(Component.literal("§a[UUP] Registered wireless target: " + targetPos.toShortString()));
+            if (!player.getAbilities().instabuild) {
+                card.shrink(1);
+            }
+            player.sendSystemMessage(Component.literal("§a[UUP] Registered wireless target: " + targetPos.toShortString() + " (Consumed 1x Network Upgrade)"));
         } else {
-            player.sendSystemMessage(Component.literal("§c[UUP] Network card has no linked target coordinates!"));
+            player.sendSystemMessage(Component.literal("§c[UUP] Network Upgrade has no linked target coordinates!"));
         }
     }
 

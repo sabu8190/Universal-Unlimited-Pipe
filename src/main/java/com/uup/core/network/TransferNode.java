@@ -18,16 +18,22 @@ public class TransferNode {
     private TransferMode mode;
     private int priority;
     private int channelId;
+    private int overclocks;
     private boolean isWirelessRemote;
 
-    public TransferNode(BlockPos pos, ResourceKey<Level> dimension, Direction targetSide, TransferMode mode, int priority, int channelId, boolean isWirelessRemote) {
+    public TransferNode(BlockPos pos, ResourceKey<Level> dimension, Direction targetSide, TransferMode mode, int priority, int channelId, int overclocks, boolean isWirelessRemote) {
         this.pos = pos;
         this.dimension = dimension;
         this.targetSide = targetSide;
         this.mode = mode;
         this.priority = priority;
         this.channelId = channelId;
+        this.overclocks = overclocks;
         this.isWirelessRemote = isWirelessRemote;
+    }
+
+    public TransferNode(BlockPos pos, ResourceKey<Level> dimension, Direction targetSide, TransferMode mode, int priority, int channelId, boolean isWirelessRemote) {
+        this(pos, dimension, targetSide, mode, priority, channelId, 0, isWirelessRemote);
     }
 
     public BlockPos getPos() {
@@ -66,6 +72,14 @@ public class TransferNode {
         this.channelId = channelId;
     }
 
+    public int getOverclocks() {
+        return overclocks;
+    }
+
+    public void setOverclocks(int overclocks) {
+        this.overclocks = overclocks;
+    }
+
     public boolean isWirelessRemote() {
         return isWirelessRemote;
     }
@@ -78,6 +92,7 @@ public class TransferNode {
         tag.putString("Mode", mode.name());
         tag.putInt("Priority", priority);
         tag.putInt("Channel", channelId);
+        tag.putInt("Overclocks", overclocks);
         tag.putBoolean("Wireless", isWirelessRemote);
         return tag;
     }
@@ -90,8 +105,9 @@ public class TransferNode {
         TransferMode mode = TransferMode.valueOf(tag.getString("Mode"));
         int priority = tag.getInt("Priority");
         int channel = tag.getInt("Channel");
+        int overclocks = tag.contains("Overclocks") ? tag.getInt("Overclocks") : 0;
         boolean wireless = tag.getBoolean("Wireless");
-        return new TransferNode(pos, dim, side, mode, priority, channel, wireless);
+        return new TransferNode(pos, dim, side, mode, priority, channel, overclocks, wireless);
     }
 
     @Override

@@ -165,6 +165,33 @@ public class PipeBlock extends Block implements EntityBlock {
         return shape;
     }
 
+    @Override
+    public net.minecraft.world.InteractionResult use(
+            BlockState state,
+            Level level,
+            BlockPos pos,
+            net.minecraft.world.entity.player.Player player,
+            net.minecraft.world.InteractionHand hand,
+            net.minecraft.world.phys.BlockHitResult hit
+    ) {
+        if (!level.isClientSide && hand == net.minecraft.world.InteractionHand.MAIN_HAND) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof PipeBlockEntity pipeBE && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                Direction clickedSide = hit.getDirection();
+                net.minecraftforge.network.NetworkHooks.openScreen(
+                        serverPlayer,
+                        pipeBE.getMenuProvider(clickedSide),
+                        buf -> {
+                            buf.writeBlockPos(pos);
+                            buf.writeEnum(clickedSide);
+                        }
+                );
+                return net.minecraft.world.InteractionResult.SUCCESS;
+            }
+        }
+        return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
+    }
+
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
