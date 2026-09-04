@@ -1,0 +1,21 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "OOO",
+    "ODO",
+    "OOO"
+  ],
+  "key": {
+    "O": {
+      "item": "minecraft:obsidian"
+    },
+    "D": {
+      "item": "minecraft:redstone"
+    }
+  },
+  "result": {
+    "item": "uup:node",
+    "count": 1
+  }
+}

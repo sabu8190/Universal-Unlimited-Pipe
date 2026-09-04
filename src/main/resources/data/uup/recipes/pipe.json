@@ -1,0 +1,22 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    {
+      "item": "uup:item_pipe"
+    },
+    {
+      "item": "uup:fluid_pipe"
+    },
+    {
+      "item": "uup:energy_pipe"
+    },
+    {
+      "item": "uup:gas_pipe"
+    }
+  ],
+  "result": {
+    "item": "uup:pipe",
+    "count": 4
+  }
+}
