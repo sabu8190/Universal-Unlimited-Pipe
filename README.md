@@ -5,7 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📥 ビルド済み Mod JAR（直ダウンロード）
-👉 **[uup-1.20.1-1.0.0.jar をダウンロード (releases/)](https://github.com/sabu8190/Universal-Unlimited-Pipe/raw/main/releases/uup-1.20.1-1.0.0.jar)**
+👉 **[uup-1.20.1-1.1.0.jar (最新 v1.1.0)](https://github.com/sabu8190/Universal-Unlimited-Pipe/releases/download/v1.1.0/uup-1.20.1-1.1.0.jar)**
+- [過去バージョン: v1.0.0 (uup-1.20.1-1.0.0.jar)](https://github.com/sabu8190/Universal-Unlimited-Pipe/releases/download/v1.0.0/uup-1.20.1-1.0.0.jar)
 
 ---
 
