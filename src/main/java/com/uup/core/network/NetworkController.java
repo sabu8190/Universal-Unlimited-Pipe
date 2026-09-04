@@ -31,9 +31,11 @@ public class NetworkController {
     private int overclockCount = 0;
     private long tickCounter = 0;
 
-    // Cache of physical pipe positions connected to this controller
+    // Cache of physical network components
     private final Set<BlockPos> cachedPipes = new HashSet<>();
     private final Set<BlockPos> scannedNodePositions = new HashSet<>();
+    private final Set<BlockPos> foundControllers = new HashSet<>();
+    private BlockPos lowestPipePos = null;
     private boolean networkDirty = true;
 
     public NetworkController() {
@@ -59,6 +61,14 @@ public class NetworkController {
         this.networkDirty = true;
     }
 
+    public boolean hasController() {
+        return !foundControllers.isEmpty();
+    }
+
+    public boolean isMasterPipe(BlockPos myPos) {
+        return foundControllers.isEmpty() && myPos != null && myPos.equals(lowestPipePos);
+    }
+
     public void addNode(TransferNode node) {
         if (!configuredNodes.contains(node)) {
             configuredNodes.add(node);
@@ -71,24 +81,37 @@ public class NetworkController {
         UUPLogger.info(String.format("Removed UUP node at %s", node.getPos()));
     }
 
-    private void rebuildPipeNetwork(ServerLevel level, BlockPos controllerPos) {
+    public void rebuildPipeNetwork(ServerLevel level, BlockPos startPos) {
         cachedPipes.clear();
         scannedNodePositions.clear();
+        foundControllers.clear();
+        lowestPipePos = null;
+
         Queue<BlockPos> queue = new ArrayDeque<>();
         Set<BlockPos> visited = new HashSet<>();
 
-        // Start scanning all pipes directly adjacent to controller
-        for (Direction dir : Direction.values()) {
-            BlockPos adj = controllerPos.relative(dir);
-            if (level.isLoaded(adj) && level.getBlockState(adj).getBlock() instanceof PipeBlock) {
-                queue.add(adj);
-                visited.add(adj);
+        BlockState startState = level.getBlockState(startPos);
+        if (startState.getBlock() instanceof PipeBlock) {
+            queue.add(startPos);
+            visited.add(startPos);
+        } else if (startState.is(ModBlocks.CONTROLLER.get())) {
+            foundControllers.add(startPos);
+            for (Direction dir : Direction.values()) {
+                BlockPos adj = startPos.relative(dir);
+                if (level.isLoaded(adj) && level.getBlockState(adj).getBlock() instanceof PipeBlock) {
+                    queue.add(adj);
+                    visited.add(adj);
+                }
             }
         }
 
         while (!queue.isEmpty() && visited.size() < 8192) {
             BlockPos current = queue.poll();
             cachedPipes.add(current);
+
+            if (lowestPipePos == null || current.compareTo(lowestPipePos) < 0) {
+                lowestPipePos = current;
+            }
 
             for (Direction dir : Direction.values()) {
                 BlockPos next = current.relative(dir);
@@ -100,15 +123,18 @@ public class NetworkController {
                     } else if (nextState.is(ModBlocks.NODE.get())) {
                         visited.add(next);
                         scannedNodePositions.add(next);
+                    } else if (nextState.is(ModBlocks.CONTROLLER.get())) {
+                        visited.add(next);
+                        foundControllers.add(next);
                     }
                 }
             }
         }
         networkDirty = false;
-        UUPLogger.debug(String.format("Rebuilt UUP pipe network: %d pipes and %d attached nodes discovered.", cachedPipes.size(), scannedNodePositions.size()));
+        UUPLogger.debug(String.format("Rebuilt UUP network: %d pipes, %d nodes, %d controllers.", cachedPipes.size(), scannedNodePositions.size(), foundControllers.size()));
     }
 
-    public void tick(ServerLevel level, BlockPos controllerPos) {
+    public void tick(ServerLevel level, BlockPos originPos) {
         tickCounter++;
         int interval = ModConfig.COMMON != null && ModConfig.COMMON.tickInterval != null 
                 ? ModConfig.COMMON.tickInterval.get() : 1;
@@ -117,8 +143,8 @@ public class NetworkController {
             return;
         }
 
-        if (networkDirty) {
-            rebuildPipeNetwork(level, controllerPos);
+        if (networkDirty || cachedPipes.isEmpty()) {
+            rebuildPipeNetwork(level, originPos);
         }
 
         List<IItemHandler> itemInjectors = new ArrayList<>();
@@ -128,13 +154,11 @@ public class NetworkController {
         List<IEnergyStorage> energyInjectors = new ArrayList<>();
         List<IEnergyStorage> energyExtractors = new ArrayList<>();
 
-        // Track positions where dedicated transfer node parts are placed to prevent duplicate direct pipe connections
         Set<BlockPos> handledPositions = new HashSet<>();
 
-        // 1. Process configured nodes (Manual / Wireless Cards)
+        // 1. Process configured nodes (Manual / Wireless Cards / Attached Node blocks)
         List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
 
-        // Also add scanned physical nodes on the pipe network
         for (BlockPos nodePos : scannedNodePositions) {
             if (level.isLoaded(nodePos)) {
                 BlockEntity be = level.getBlockEntity(nodePos);
@@ -184,13 +208,16 @@ public class NetworkController {
             });
         }
 
-        // 2. Process Direct Pipe Connections (Pipes connected directly to machines without extra parts)
+        // 2. Process Direct Pipe Connections
         for (BlockPos pipePos : cachedPipes) {
             if (!level.isLoaded(pipePos)) continue;
 
+            BlockState pipeState = level.getBlockState(pipePos);
+            PipeBlock.PipeType pType = pipeState.getBlock() instanceof PipeBlock pb ? pb.getType() : PipeBlock.PipeType.UNIVERSAL;
+
             for (Direction dir : Direction.values()) {
                 BlockPos neighborPos = pipePos.relative(dir);
-                if (neighborPos.equals(controllerPos) || cachedPipes.contains(neighborPos) || handledPositions.contains(neighborPos)) {
+                if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos) || handledPositions.contains(neighborPos)) {
                     continue;
                 }
                 if (!level.isLoaded(neighborPos)) continue;
@@ -200,28 +227,38 @@ public class NetworkController {
 
                 Direction side = dir.getOpposite();
 
-                // Direct connected machine: automatically supports both extract and insert
-                be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
-                    if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
-                    if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
-                });
+                // Item transfer
+                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ITEM) {
+                    be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
+                        if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
+                        if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
+                    });
+                }
 
-                be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
-                    if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
-                    if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
-                });
+                // Fluid transfer
+                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.FLUID) {
+                    be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
+                        if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
+                        if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
+                    });
+                }
 
-                be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
-                    if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
-                    if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
-                });
+                // Energy transfer
+                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ENERGY) {
+                    be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
+                        if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
+                        if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
+                    });
+                }
             }
         }
 
-        // 3. Dispatch Controller Internal Buffer
-        ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, overclockCount);
-        FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, overclockCount);
-        EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, overclockCount);
+        // 3. Dispatch Controller Internal Buffer (if controller exists)
+        if (!foundControllers.isEmpty()) {
+            ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, overclockCount);
+            FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, overclockCount);
+            EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, overclockCount);
+        }
 
         // 4. Execute transfers between extractors and injectors
         for (IItemHandler extractor : itemExtractors) {
@@ -239,6 +276,8 @@ public class NetworkController {
         CompoundTag tag = new CompoundTag();
         tag.put("Buffer", directBuffer.serializeNBT());
         tag.putInt("Overclocks", overclockCount);
+
+
 
         ListTag list = new ListTag();
         for (TransferNode node : configuredNodes) {
