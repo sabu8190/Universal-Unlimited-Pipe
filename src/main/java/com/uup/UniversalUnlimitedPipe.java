@@ -28,6 +28,7 @@ public class UniversalUnlimitedPipe {
         ModBlockEntities.register(modEventBus);
         ModMenus.register(modEventBus);
         ModCreativeTabs.register(modEventBus);
+        com.uup.setup.ModRecipes.register(modEventBus);
 
         modEventBus.addListener(this::commonSetup);
         MinecraftForge.EVENT_BUS.register(this);

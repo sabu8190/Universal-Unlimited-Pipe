@@ -1,33 +1,4 @@
 {
-  "type": "minecraft:crafting_shaped",
-  "category": "misc",
-  "pattern": [
-    "OGO",
-    "FPI",
-    "OEO"
-  ],
-  "key": {
-    "O": {
-      "item": "minecraft:obsidian"
-    },
-    "G": {
-      "item": "uup:gas_pipe"
-    },
-    "F": {
-      "item": "uup:fluid_pipe"
-    },
-    "P": {
-      "item": "minecraft:ender_pearl"
-    },
-    "I": {
-      "item": "uup:item_pipe"
-    },
-    "E": {
-      "item": "uup:energy_pipe"
-    }
-  },
-  "result": {
-    "item": "uup:controller",
-    "count": 1
-  }
+  "type": "uup:crafting_special_controller",
+  "category": "misc"
 }
