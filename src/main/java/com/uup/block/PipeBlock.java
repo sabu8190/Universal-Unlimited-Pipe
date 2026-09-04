@@ -168,6 +168,23 @@ public class PipeBlock extends Block implements EntityBlock {
         return shape;
     }
 
+    public boolean isConnectedToMachine(LevelAccessor level, BlockPos pos, Direction dir) {
+        BlockPos neighbor = pos.relative(dir);
+        if (!level.hasChunkAt(neighbor)) return false;
+        BlockState neighborState = level.getBlockState(neighbor);
+        if (neighborState.getBlock() instanceof PipeBlock || neighborState.is(ModBlocks.CONTROLLER.get()) || neighborState.is(ModBlocks.NODE.get())) {
+            return false;
+        }
+        BlockEntity neighborBE = level.getBlockEntity(neighbor);
+        if (neighborBE == null) return false;
+        Direction opposite = dir.getOpposite();
+        return neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, opposite).isPresent()
+                || neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, opposite).isPresent()
+                || neighborBE.getCapability(ForgeCapabilities.ENERGY, opposite).isPresent()
+                || EnergyTransferExecutor.canConnectStrictEnergy(neighborBE, opposite)
+                || GasTransferExecutor.canConnectGas(neighborBE, opposite);
+    }
+
     @Override
     public net.minecraft.world.InteractionResult use(
             BlockState state,
@@ -181,15 +198,36 @@ public class PipeBlock extends Block implements EntityBlock {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof PipeBlockEntity pipeBE && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
                 Direction clickedSide = hit.getDirection();
-                net.minecraftforge.network.NetworkHooks.openScreen(
-                        serverPlayer,
-                        pipeBE.getMenuProvider(clickedSide),
-                        buf -> {
-                            buf.writeBlockPos(pos);
-                            buf.writeEnum(clickedSide);
+                Direction targetSide = null;
+
+                // 1. Check if the clicked face itself connects to a machine/tank
+                if (isConnectedToMachine(level, pos, clickedSide)) {
+                    targetSide = clickedSide;
+                } else {
+                    // 2. If clicked side doesn't have a machine, check if only 1 machine attached
+                    java.util.List<Direction> connectedSides = new java.util.ArrayList<>();
+                    for (Direction dir : Direction.values()) {
+                        if (isConnectedToMachine(level, pos, dir)) {
+                            connectedSides.add(dir);
                         }
-                );
-                return net.minecraft.world.InteractionResult.SUCCESS;
+                    }
+                    if (connectedSides.size() == 1) {
+                        targetSide = connectedSides.get(0);
+                    }
+                }
+
+                if (targetSide != null) {
+                    final Direction finalSide = targetSide;
+                    net.minecraftforge.network.NetworkHooks.openScreen(
+                            serverPlayer,
+                            pipeBE.getMenuProvider(finalSide),
+                            buf -> {
+                                buf.writeBlockPos(pos);
+                                buf.writeEnum(finalSide);
+                            }
+                    );
+                    return net.minecraft.world.InteractionResult.SUCCESS;
+                }
             }
         }
         return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);

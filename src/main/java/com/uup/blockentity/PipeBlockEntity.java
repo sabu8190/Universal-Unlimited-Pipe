@@ -104,6 +104,15 @@ public class PipeBlockEntity extends BlockEntity {
         return new MenuProvider() {
             @Override
             public Component getDisplayName() {
+                if (level != null) {
+                    BlockPos neighborPos = worldPosition.relative(side);
+                    if (level.hasChunkAt(neighborPos)) {
+                        BlockState neighborState = level.getBlockState(neighborPos);
+                        if (!neighborState.isAir()) {
+                            return Component.literal(neighborState.getBlock().getName().getString() + " (" + side.getName().toUpperCase() + ")");
+                        }
+                    }
+                }
                 return Component.literal("接続設定 (" + side.getName().toUpperCase() + ")");
             }
 
