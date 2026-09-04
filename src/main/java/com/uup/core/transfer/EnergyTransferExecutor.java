@@ -72,4 +72,16 @@ public class EnergyTransferExecutor {
         if (storage == null || targetHandlers == null || targetHandlers.isEmpty()) return;
         executeTransfer(storage.getEnergyBuffer(), targetHandlers, overclocks, "UUP_Controller_Energy_Buffer", "Network_Targets");
     }
+
+    public static void ingestToInternalBuffer(
+            DirectBufferStorage storage,
+            List<IEnergyStorage> sourceHandlers,
+            int overclocks
+    ) {
+        if (storage == null || sourceHandlers == null || sourceHandlers.isEmpty()) return;
+        List<IEnergyStorage> target = List.of(storage.getEnergyBuffer());
+        for (IEnergyStorage source : sourceHandlers) {
+            executeTransfer(source, target, overclocks, "Network_Source", "UUP_Controller_Energy_Buffer");
+        }
+    }
 }

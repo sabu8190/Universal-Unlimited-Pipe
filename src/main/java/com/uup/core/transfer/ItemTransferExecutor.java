@@ -115,4 +115,16 @@ public class ItemTransferExecutor {
         if (storage == null || targetHandlers == null || targetHandlers.isEmpty()) return;
         executeTransfer(storage.getItemBuffer(), targetHandlers, overclocks, "UUP_Controller_Buffer", "Network_Targets");
     }
+
+    public static void ingestToInternalBuffer(
+            DirectBufferStorage storage,
+            List<IItemHandler> sourceHandlers,
+            int overclocks
+    ) {
+        if (storage == null || sourceHandlers == null || sourceHandlers.isEmpty()) return;
+        List<IItemHandler> target = List.of(storage.getItemBuffer());
+        for (IItemHandler source : sourceHandlers) {
+            executeTransfer(source, target, overclocks, "Network_Source", "UUP_Controller_Buffer");
+        }
+    }
 }

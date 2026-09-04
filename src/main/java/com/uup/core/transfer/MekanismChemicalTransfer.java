@@ -132,4 +132,158 @@ public class MekanismChemicalTransfer {
             transferChemical((ISlurryHandler) ext, (List) sluInj, overclocks, "MEK_SLURRY");
         }
     }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static void dispatchInternalBuffer(
+            MekanismBuffer buffer,
+            List<Object> gasInj, List<Object> infInj, List<Object> pigInj, List<Object> sluInj,
+            int overclocks
+    ) {
+        if (buffer == null) return;
+        if (gasInj != null && !gasInj.isEmpty()) {
+            transferChemical(buffer.gasHandler, (List) gasInj, overclocks, "UUP_Controller_Gas_Buffer");
+        }
+        if (infInj != null && !infInj.isEmpty()) {
+            transferChemical(buffer.infusionHandler, (List) infInj, overclocks, "UUP_Controller_Infusion_Buffer");
+        }
+        if (pigInj != null && !pigInj.isEmpty()) {
+            transferChemical(buffer.pigmentHandler, (List) pigInj, overclocks, "UUP_Controller_Pigment_Buffer");
+        }
+        if (sluInj != null && !sluInj.isEmpty()) {
+            transferChemical(buffer.slurryHandler, (List) sluInj, overclocks, "UUP_Controller_Slurry_Buffer");
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static void ingestToInternalBuffer(
+            MekanismBuffer buffer,
+            List<Object> gasExt, List<Object> infExt, List<Object> pigExt, List<Object> sluExt,
+            int overclocks
+    ) {
+        if (buffer == null) return;
+        if (gasExt != null && !gasExt.isEmpty()) {
+            List<IGasHandler> target = List.of(buffer.gasHandler);
+            for (Object ext : gasExt) {
+                transferChemical((IGasHandler) ext, (List) target, overclocks, "Mek_Gas_Ingest");
+            }
+        }
+        if (infExt != null && !infExt.isEmpty()) {
+            List<IInfusionHandler> target = List.of(buffer.infusionHandler);
+            for (Object ext : infExt) {
+                transferChemical((IInfusionHandler) ext, (List) target, overclocks, "Mek_Infusion_Ingest");
+            }
+        }
+        if (pigExt != null && !pigExt.isEmpty()) {
+            List<IPigmentHandler> target = List.of(buffer.pigmentHandler);
+            for (Object ext : pigExt) {
+                transferChemical((IPigmentHandler) ext, (List) target, overclocks, "Mek_Pigment_Ingest");
+            }
+        }
+        if (sluExt != null && !sluExt.isEmpty()) {
+            List<ISlurryHandler> target = List.of(buffer.slurryHandler);
+            for (Object ext : sluExt) {
+                transferChemical((ISlurryHandler) ext, (List) target, overclocks, "Mek_Slurry_Ingest");
+            }
+        }
+    }
+
+    public static class MekanismBuffer {
+        public final mekanism.api.chemical.gas.IGasTank gasTank = mekanism.api.chemical.ChemicalTankBuilder.GAS.createAllValid(Long.MAX_VALUE, null);
+        public final mekanism.api.chemical.infuse.IInfusionTank infusionTank = mekanism.api.chemical.ChemicalTankBuilder.INFUSION.createAllValid(Long.MAX_VALUE, null);
+        public final mekanism.api.chemical.pigment.IPigmentTank pigmentTank = mekanism.api.chemical.ChemicalTankBuilder.PIGMENT.createAllValid(Long.MAX_VALUE, null);
+        public final mekanism.api.chemical.slurry.ISlurryTank slurryTank = mekanism.api.chemical.ChemicalTankBuilder.SLURRY.createAllValid(Long.MAX_VALUE, null);
+
+        public final IGasHandler gasHandler = new IGasHandler() {
+            @Override public int getTanks() { return 1; }
+            @Override public mekanism.api.chemical.gas.GasStack getChemicalInTank(int tank) { return tank == 0 ? gasTank.getStack() : mekanism.api.chemical.gas.GasStack.EMPTY; }
+            @Override public void setChemicalInTank(int tank, mekanism.api.chemical.gas.GasStack stack) { if (tank == 0) gasTank.setStack(stack); }
+            @Override public long getTankCapacity(int tank) { return tank == 0 ? gasTank.getCapacity() : 0; }
+            @Override public boolean isValid(int tank, mekanism.api.chemical.gas.GasStack stack) { return tank == 0 && gasTank.isValid(stack); }
+            @Override public mekanism.api.chemical.gas.GasStack insertChemical(int tank, mekanism.api.chemical.gas.GasStack stack, Action action) {
+                return tank == 0 ? gasTank.insert(stack, action, mekanism.api.AutomationType.EXTERNAL) : stack;
+            }
+            @Override public mekanism.api.chemical.gas.GasStack extractChemical(int tank, long amount, Action action) {
+                return tank == 0 ? gasTank.extract(amount, action, mekanism.api.AutomationType.EXTERNAL) : mekanism.api.chemical.gas.GasStack.EMPTY;
+            }
+        };
+
+        public final IInfusionHandler infusionHandler = new IInfusionHandler() {
+            @Override public int getTanks() { return 1; }
+            @Override public mekanism.api.chemical.infuse.InfusionStack getChemicalInTank(int tank) { return tank == 0 ? infusionTank.getStack() : mekanism.api.chemical.infuse.InfusionStack.EMPTY; }
+            @Override public void setChemicalInTank(int tank, mekanism.api.chemical.infuse.InfusionStack stack) { if (tank == 0) infusionTank.setStack(stack); }
+            @Override public long getTankCapacity(int tank) { return tank == 0 ? infusionTank.getCapacity() : 0; }
+            @Override public boolean isValid(int tank, mekanism.api.chemical.infuse.InfusionStack stack) { return tank == 0 && infusionTank.isValid(stack); }
+            @Override public mekanism.api.chemical.infuse.InfusionStack insertChemical(int tank, mekanism.api.chemical.infuse.InfusionStack stack, Action action) {
+                return tank == 0 ? infusionTank.insert(stack, action, mekanism.api.AutomationType.EXTERNAL) : stack;
+            }
+            @Override public mekanism.api.chemical.infuse.InfusionStack extractChemical(int tank, long amount, Action action) {
+                return tank == 0 ? infusionTank.extract(amount, action, mekanism.api.AutomationType.EXTERNAL) : mekanism.api.chemical.infuse.InfusionStack.EMPTY;
+            }
+        };
+
+        public final IPigmentHandler pigmentHandler = new IPigmentHandler() {
+            @Override public int getTanks() { return 1; }
+            @Override public mekanism.api.chemical.pigment.PigmentStack getChemicalInTank(int tank) { return tank == 0 ? pigmentTank.getStack() : mekanism.api.chemical.pigment.PigmentStack.EMPTY; }
+            @Override public void setChemicalInTank(int tank, mekanism.api.chemical.pigment.PigmentStack stack) { if (tank == 0) pigmentTank.setStack(stack); }
+            @Override public long getTankCapacity(int tank) { return tank == 0 ? pigmentTank.getCapacity() : 0; }
+            @Override public boolean isValid(int tank, mekanism.api.chemical.pigment.PigmentStack stack) { return tank == 0 && pigmentTank.isValid(stack); }
+            @Override public mekanism.api.chemical.pigment.PigmentStack insertChemical(int tank, mekanism.api.chemical.pigment.PigmentStack stack, Action action) {
+                return tank == 0 ? pigmentTank.insert(stack, action, mekanism.api.AutomationType.EXTERNAL) : stack;
+            }
+            @Override public mekanism.api.chemical.pigment.PigmentStack extractChemical(int tank, long amount, Action action) {
+                return tank == 0 ? pigmentTank.extract(amount, action, mekanism.api.AutomationType.EXTERNAL) : mekanism.api.chemical.pigment.PigmentStack.EMPTY;
+            }
+        };
+
+        public final ISlurryHandler slurryHandler = new ISlurryHandler() {
+            @Override public int getTanks() { return 1; }
+            @Override public mekanism.api.chemical.slurry.SlurryStack getChemicalInTank(int tank) { return tank == 0 ? slurryTank.getStack() : mekanism.api.chemical.slurry.SlurryStack.EMPTY; }
+            @Override public void setChemicalInTank(int tank, mekanism.api.chemical.slurry.SlurryStack stack) { if (tank == 0) slurryTank.setStack(stack); }
+            @Override public long getTankCapacity(int tank) { return tank == 0 ? slurryTank.getCapacity() : 0; }
+            @Override public boolean isValid(int tank, mekanism.api.chemical.slurry.SlurryStack stack) { return tank == 0 && slurryTank.isValid(stack); }
+            @Override public mekanism.api.chemical.slurry.SlurryStack insertChemical(int tank, mekanism.api.chemical.slurry.SlurryStack stack, Action action) {
+                return tank == 0 ? slurryTank.insert(stack, action, mekanism.api.AutomationType.EXTERNAL) : stack;
+            }
+            @Override public mekanism.api.chemical.slurry.SlurryStack extractChemical(int tank, long amount, Action action) {
+                return tank == 0 ? slurryTank.extract(amount, action, mekanism.api.AutomationType.EXTERNAL) : mekanism.api.chemical.slurry.SlurryStack.EMPTY;
+            }
+        };
+
+        public final net.minecraftforge.common.util.LazyOptional<IGasHandler> gasOpt = net.minecraftforge.common.util.LazyOptional.of(() -> gasHandler);
+        public final net.minecraftforge.common.util.LazyOptional<IInfusionHandler> infusionOpt = net.minecraftforge.common.util.LazyOptional.of(() -> infusionHandler);
+        public final net.minecraftforge.common.util.LazyOptional<IPigmentHandler> pigmentOpt = net.minecraftforge.common.util.LazyOptional.of(() -> pigmentHandler);
+        public final net.minecraftforge.common.util.LazyOptional<ISlurryHandler> slurryOpt = net.minecraftforge.common.util.LazyOptional.of(() -> slurryHandler);
+
+        public void invalidate() {
+            gasOpt.invalidate();
+            infusionOpt.invalidate();
+            pigmentOpt.invalidate();
+            slurryOpt.invalidate();
+        }
+
+        public net.minecraft.nbt.CompoundTag serializeNBT() {
+            net.minecraft.nbt.CompoundTag tag = new net.minecraft.nbt.CompoundTag();
+            tag.put("Gas", gasTank.serializeNBT());
+            tag.put("Infusion", infusionTank.serializeNBT());
+            tag.put("Pigment", pigmentTank.serializeNBT());
+            tag.put("Slurry", slurryTank.serializeNBT());
+            return tag;
+        }
+
+        public void deserializeNBT(net.minecraft.nbt.CompoundTag tag) {
+            if (tag.contains("Gas")) gasTank.deserializeNBT(tag.getCompound("Gas"));
+            if (tag.contains("Infusion")) infusionTank.deserializeNBT(tag.getCompound("Infusion"));
+            if (tag.contains("Pigment")) pigmentTank.deserializeNBT(tag.getCompound("Pigment"));
+            if (tag.contains("Slurry")) slurryTank.deserializeNBT(tag.getCompound("Slurry"));
+        }
+
+        @SuppressWarnings("unchecked")
+        public <T> net.minecraftforge.common.util.LazyOptional<T> getCapability(net.minecraftforge.common.capabilities.Capability<T> cap) {
+            if (cap == Capabilities.GAS_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) gasOpt;
+            if (cap == Capabilities.INFUSION_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) infusionOpt;
+            if (cap == Capabilities.PIGMENT_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) pigmentOpt;
+            if (cap == Capabilities.SLURRY_HANDLER) return (net.minecraftforge.common.util.LazyOptional<T>) slurryOpt;
+            return net.minecraftforge.common.util.LazyOptional.empty();
+        }
+    }
 }

@@ -75,4 +75,16 @@ public class FluidTransferExecutor {
         if (storage == null || targetHandlers == null || targetHandlers.isEmpty()) return;
         executeTransfer(storage.getFluidBuffer(), targetHandlers, overclocks, "UUP_Controller_Fluid_Buffer", "Network_Targets");
     }
+
+    public static void ingestToInternalBuffer(
+            DirectBufferStorage storage,
+            List<IFluidHandler> sourceHandlers,
+            int overclocks
+    ) {
+        if (storage == null || sourceHandlers == null || sourceHandlers.isEmpty()) return;
+        List<IFluidHandler> target = List.of(storage.getFluidBuffer());
+        for (IFluidHandler source : sourceHandlers) {
+            executeTransfer(source, target, overclocks, "Network_Source", "UUP_Controller_Fluid_Buffer");
+        }
+    }
 }

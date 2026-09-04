@@ -76,6 +76,10 @@ public class ControllerBlockEntity extends BlockEntity {
         if (cap == ForgeCapabilities.ENERGY) {
             return energyOpt.cast();
         }
+        LazyOptional<T> mekCap = com.uup.core.transfer.GasTransferExecutor.getControllerCapability(network.getDirectBuffer().getMekanismBuffer(), cap);
+        if (mekCap.isPresent()) {
+            return mekCap;
+        }
         return super.getCapability(cap, side);
     }
 
@@ -85,6 +89,7 @@ public class ControllerBlockEntity extends BlockEntity {
         itemOpt.invalidate();
         fluidOpt.invalidate();
         energyOpt.invalidate();
+        network.getDirectBuffer().invalidate();
     }
 
     @Override

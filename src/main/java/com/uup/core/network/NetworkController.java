@@ -274,11 +274,61 @@ public class NetworkController {
             }
         }
 
-        // 3. Dispatch Controller Internal Buffer (if controller exists)
+        // 2.5 Process Direct Controller Connections (Machine directly touching Controller)
+        for (BlockPos ctrlPos : foundControllers) {
+            if (!level.isLoaded(ctrlPos)) continue;
+
+            for (Direction dir : Direction.values()) {
+                BlockPos neighborPos = ctrlPos.relative(dir);
+                if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos) || handledPositions.contains(neighborPos)) {
+                    continue;
+                }
+                if (!level.isLoaded(neighborPos)) continue;
+
+                BlockEntity be = level.getBlockEntity(neighborPos);
+                if (be == null) continue;
+
+                Direction side = dir.getOpposite();
+
+                be.getCapability(ForgeCapabilities.ITEM_HANDLER, side).ifPresent(handler -> {
+                    if (!itemInjectors.contains(handler)) itemInjectors.add(handler);
+                    if (!itemExtractors.contains(handler)) itemExtractors.add(handler);
+                });
+
+                be.getCapability(ForgeCapabilities.FLUID_HANDLER, side).ifPresent(handler -> {
+                    if (!fluidInjectors.contains(handler)) fluidInjectors.add(handler);
+                    if (!fluidExtractors.contains(handler)) fluidExtractors.add(handler);
+                });
+
+                be.getCapability(ForgeCapabilities.ENERGY, side).ifPresent(handler -> {
+                    if (!energyInjectors.contains(handler)) energyInjectors.add(handler);
+                    if (!energyExtractors.contains(handler)) energyExtractors.add(handler);
+                });
+
+                GasTransferExecutor.collectCapabilities(
+                        be, side,
+                        true, true,
+                        gasInjectors, gasExtractors,
+                        infuseInjectors, infuseExtractors,
+                        pigmentInjectors, pigmentExtractors,
+                        slurryInjectors, slurryExtractors
+                );
+            }
+        }
+
+        // 3. Controller Internal Buffer Transfer (Dispatch & Ingest for all resources)
         if (!foundControllers.isEmpty()) {
+            // Dispatch internal buffer -> network injection targets
             ItemTransferExecutor.dispatchInternalBuffer(directBuffer, itemInjectors, overclockCount);
             FluidTransferExecutor.dispatchInternalBuffer(directBuffer, fluidInjectors, overclockCount);
             EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, energyInjectors, overclockCount);
+            GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), gasInjectors, infuseInjectors, pigmentInjectors, slurryInjectors, overclockCount);
+
+            // Ingest network extraction sources -> internal buffer
+            ItemTransferExecutor.ingestToInternalBuffer(directBuffer, itemExtractors, overclockCount);
+            FluidTransferExecutor.ingestToInternalBuffer(directBuffer, fluidExtractors, overclockCount);
+            EnergyTransferExecutor.ingestToInternalBuffer(directBuffer, energyExtractors, overclockCount);
+            GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, overclockCount);
         }
 
         // 4. Execute transfers between extractors and injectors
