@@ -14,6 +14,14 @@ public class ModBlocks {
     public static final DeferredRegister<Block> BLOCKS = DeferredRegister.create(ForgeRegistries.BLOCKS, UniversalUnlimitedPipe.MODID);
 
     public static final RegistryObject<Block> CONTROLLER = BLOCKS.register("controller", ControllerBlock::new);
+    public static final RegistryObject<Block> PROCESSOR_1_81 = BLOCKS.register("processor_1_81", () -> new Block(Block.Properties.of()
+            .strength(3.5F, 1200.0F)
+            .sound(net.minecraft.world.level.block.SoundType.NETHERITE_BLOCK)
+            .requiresCorrectToolForDrops()));
+    public static final RegistryObject<Block> PROCESSOR_1_9 = BLOCKS.register("processor_1_9", () -> new Block(Block.Properties.of()
+            .strength(3.5F, 1200.0F)
+            .sound(net.minecraft.world.level.block.SoundType.NETHERITE_BLOCK)
+            .requiresCorrectToolForDrops()));
     public static final RegistryObject<Block> PIPE = BLOCKS.register("pipe", () -> new PipeBlock(PipeBlock.PipeType.UNIVERSAL));
     public static final RegistryObject<Block> ENERGY_PIPE = BLOCKS.register("energy_pipe", () -> new PipeBlock(PipeBlock.PipeType.ENERGY));
     public static final RegistryObject<Block> FLUID_PIPE = BLOCKS.register("fluid_pipe", () -> new PipeBlock(PipeBlock.PipeType.FLUID));

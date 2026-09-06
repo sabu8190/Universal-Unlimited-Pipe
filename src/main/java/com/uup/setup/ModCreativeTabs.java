@@ -17,6 +17,8 @@ public class ModCreativeTabs {
             .title(Component.translatable("itemGroup.uup"))
             .displayItems((params, output) -> {
                 output.accept(ModBlocks.CONTROLLER.get());
+                output.accept(ModBlocks.PROCESSOR_1_9.get());
+                output.accept(ModBlocks.PROCESSOR_1_81.get());
                 output.accept(ModBlocks.PIPE.get());
                 output.accept(ModBlocks.ENERGY_PIPE.get());
                 output.accept(ModBlocks.FLUID_PIPE.get());

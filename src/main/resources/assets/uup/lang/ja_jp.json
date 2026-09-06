@@ -18,5 +18,9 @@
     "tooltip.uup.gas_pipe.desc": "§d最大 922京 /t §7で瞬時にMekanismの気体/薬品を移送する超高速ガス専用パイプ。",
     "tooltip.uup.node.desc": "§7チェストや機械、パイプ端面に取り付けて搬入・搬出・優先度・チャンネルを設定するパーツ。",
     "tooltip.uup.upgrade.desc": "§6転送速度と並列バッチ処理能力を倍率強化します。",
-    "tooltip.uup.network_card.desc": "§aブロックを右クリックして座標を記録し、コントローラーに登録します。"
+    "tooltip.uup.network_card.desc": "§aブロックを右クリックして座標を記録し、コントローラーに登録します。",
+    "block.uup.processor_1_81": "1/81 プロセッサー",
+    "block.uup.processor_1_9": "1/9 プロセッサー",
+    "tooltip.uup.processor_1_81.desc": "§7UUP コントローラーを構築するための中間プロセッサー素材 (1/81)。",
+    "tooltip.uup.processor_1_9.desc": "§7UUP コントローラーを構築するための中間プロセッサー素材 (1/9)。"
 }

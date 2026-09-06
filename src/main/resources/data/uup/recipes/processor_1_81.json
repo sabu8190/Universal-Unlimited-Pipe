@@ -1,0 +1,33 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "OFO",
+    "EPI",
+    "OGO"
+  ],
+  "key": {
+    "O": {
+      "item": "minecraft:obsidian"
+    },
+    "F": {
+      "item": "uup:fluid_pipe"
+    },
+    "E": {
+      "item": "uup:energy_pipe"
+    },
+    "P": {
+      "item": "minecraft:ender_pearl"
+    },
+    "I": {
+      "item": "uup:item_pipe"
+    },
+    "G": {
+      "item": "uup:gas_pipe"
+    }
+  },
+  "result": {
+    "item": "uup:processor_1_81",
+    "count": 1
+  }
+}

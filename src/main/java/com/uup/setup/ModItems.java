@@ -14,6 +14,8 @@ public class ModItems {
     public static final DeferredRegister<Item> ITEMS = DeferredRegister.create(ForgeRegistries.ITEMS, UniversalUnlimitedPipe.MODID);
 
     public static final RegistryObject<Item> CONTROLLER = ITEMS.register("controller", () -> new BlockItem(ModBlocks.CONTROLLER.get(), new Item.Properties()));
+    public static final RegistryObject<Item> PROCESSOR_1_81 = ITEMS.register("processor_1_81", () -> new BlockItem(ModBlocks.PROCESSOR_1_81.get(), new Item.Properties()));
+    public static final RegistryObject<Item> PROCESSOR_1_9 = ITEMS.register("processor_1_9", () -> new BlockItem(ModBlocks.PROCESSOR_1_9.get(), new Item.Properties()));
     public static final RegistryObject<Item> PIPE = ITEMS.register("pipe", () -> new BlockItem(ModBlocks.PIPE.get(), new Item.Properties()));
     public static final RegistryObject<Item> ENERGY_PIPE = ITEMS.register("energy_pipe", () -> new BlockItem(ModBlocks.ENERGY_PIPE.get(), new Item.Properties()));
     public static final RegistryObject<Item> FLUID_PIPE = ITEMS.register("fluid_pipe", () -> new BlockItem(ModBlocks.FLUID_PIPE.get(), new Item.Properties()));
