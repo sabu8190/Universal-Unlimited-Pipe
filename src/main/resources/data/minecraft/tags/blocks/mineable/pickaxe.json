@@ -1,0 +1,14 @@
+{
+  "replace": false,
+  "values": [
+    "uup:controller",
+    "uup:processor_1_81",
+    "uup:processor_1_9",
+    "uup:pipe",
+    "uup:energy_pipe",
+    "uup:fluid_pipe",
+    "uup:item_pipe",
+    "uup:gas_pipe",
+    "uup:node"
+  ]
+}
