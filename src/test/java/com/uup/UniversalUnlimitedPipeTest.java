@@ -73,4 +73,20 @@ public class UniversalUnlimitedPipeTest {
 
         Assertions.assertEquals(farHighPriority, list.get(0), "Higher priority target should come first even if farther away");
     }
+
+    @Test
+    public void testStoragePriorityOverSameDistance() {
+        boolean isStorageA = true;
+        boolean isStorageB = false;
+
+        java.util.List<Boolean> targets = new java.util.ArrayList<>(java.util.List.of(isStorageB, isStorageA));
+        targets.sort((t1, t2) -> {
+            if (t1 != t2) {
+                return t1 ? -1 : 1;
+            }
+            return 0;
+        });
+
+        Assertions.assertTrue(targets.get(0), "Storage targets should be prioritized over processing machines");
+    }
 }

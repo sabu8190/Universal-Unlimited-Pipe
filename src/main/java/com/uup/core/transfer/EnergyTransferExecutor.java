@@ -4,6 +4,7 @@ import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.energy.IEnergyStorage;
 import org.jetbrains.annotations.Nullable;
 
@@ -38,6 +39,19 @@ public class EnergyTransferExecutor {
             @Nullable Map<Object, BlockPos> handlerPositions,
             @Nullable Map<Object, Integer> handlerPriorities
     ) {
+        executeAllEnergyTransfers(extractors, injectors, overclocks, currentTick, persistentEnergyCache, handlerPositions, handlerPriorities, null);
+    }
+
+    public static void executeAllEnergyTransfers(
+            List<IEnergyStorage> extractors,
+            List<IEnergyStorage> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable java.util.Map<IEnergyStorage, Long> persistentEnergyCache,
+            @Nullable Map<Object, BlockPos> handlerPositions,
+            @Nullable Map<Object, Integer> handlerPriorities,
+            @Nullable Map<Object, BlockEntity> handlerBlockEntities
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
@@ -50,14 +64,23 @@ public class EnergyTransferExecutor {
             if (receivedInThisTick.contains(extractor)) continue;
 
             List<IEnergyStorage> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
+                BlockEntity srcBe = handlerBlockEntities != null ? handlerBlockEntities.get(ext) : null;
+                BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
+
                 List<IEnergyStorage> list = new ArrayList<>(injectors.size());
                 for (IEnergyStorage target : injectors) {
-                    if (target != null && target != ext) {
-                        list.add(target);
+                    if (target == null || target == ext) continue;
+
+                    BlockEntity targetBe = handlerBlockEntities != null ? handlerBlockEntities.get(target) : null;
+                    if (srcBe != null && targetBe != null) {
+                        if (srcBe.getClass() == targetBe.getClass() || 
+                            srcBe.getBlockState().getBlock() == targetBe.getBlockState().getBlock()) {
+                            continue;
+                        }
                     }
+                    list.add(target);
                 }
                 if (list.size() > 1) {
-                    BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
                     list.sort((t1, t2) -> {
                         int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
                         int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;

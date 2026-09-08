@@ -4,6 +4,7 @@ import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.capability.IFluidHandler;
@@ -40,6 +41,19 @@ public class FluidTransferExecutor {
             @Nullable Map<Object, BlockPos> handlerPositions,
             @Nullable Map<Object, Integer> handlerPriorities
     ) {
+        executeAllFluidTransfers(extractors, injectors, overclocks, currentTick, persistentFluidCache, handlerPositions, handlerPriorities, null);
+    }
+
+    public static void executeAllFluidTransfers(
+            List<IFluidHandler> extractors,
+            List<IFluidHandler> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentFluidCache,
+            @Nullable Map<Object, BlockPos> handlerPositions,
+            @Nullable Map<Object, Integer> handlerPriorities,
+            @Nullable Map<Object, BlockEntity> handlerBlockEntities
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
@@ -53,14 +67,23 @@ public class FluidTransferExecutor {
             if (receivedInThisTick.contains(extractor)) continue;
 
             List<IFluidHandler> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
+                BlockEntity srcBe = handlerBlockEntities != null ? handlerBlockEntities.get(ext) : null;
+                BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
+
                 List<IFluidHandler> list = new ArrayList<>(injectors.size());
                 for (IFluidHandler target : injectors) {
-                    if (target != null && target != ext) {
-                        list.add(target);
+                    if (target == null || target == ext) continue;
+
+                    BlockEntity targetBe = handlerBlockEntities != null ? handlerBlockEntities.get(target) : null;
+                    if (srcBe != null && targetBe != null) {
+                        if (srcBe.getClass() == targetBe.getClass() || 
+                            srcBe.getBlockState().getBlock() == targetBe.getBlockState().getBlock()) {
+                            continue;
+                        }
                     }
+                    list.add(target);
                 }
                 if (list.size() > 1) {
-                    BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
                     list.sort((t1, t2) -> {
                         int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
                         int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;
