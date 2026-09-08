@@ -474,7 +474,7 @@ public class NetworkController {
         sortStorageInjectors(storageEnergyInjectors, originPos, handlerPositions, handlerPriorities);
 
         // 5. Execute transfers between extractors and injectors
-        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, storageItemInjectors, machineItemInjectors, storageHandlers, effectiveOverclocks);
+        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, storageItemInjectors, machineItemInjectors, storageHandlers, effectiveOverclocks, handlerPositions);
         FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, storageFluidInjectors, machineFluidInjectors, storageHandlers, effectiveOverclocks);
         EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, storageEnergyInjectors, machineEnergyInjectors, storageHandlers, effectiveOverclocks);
         EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);

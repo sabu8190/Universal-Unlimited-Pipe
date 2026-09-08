@@ -57,6 +57,17 @@ public class ItemTransferExecutor {
             @Nullable Set<Object> storageHandlers,
             int overclocks
     ) {
+        executeAllItemTransfers(extractors, storageInjectors, machineInjectors, storageHandlers, overclocks, null);
+    }
+
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> storageInjectors,
+            List<IItemHandler> machineInjectors,
+            @Nullable Set<Object> storageHandlers,
+            int overclocks,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions
+    ) {
         if (extractors == null || extractors.isEmpty()) {
             return;
         }
@@ -96,7 +107,10 @@ public class ItemTransferExecutor {
                     "UUP_Extract",
                     "UUP_Insert",
                     tickRejectedMap,
-                    receivedInThisTick
+                    receivedInThisTick,
+                    0L,
+                    null,
+                    handlerPositions
             );
         }
     }
@@ -120,7 +134,7 @@ public class ItemTransferExecutor {
             @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
             @Nullable Set<IItemHandler> receivedHandlers
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null, null);
     }
 
     private static class TargetState {
@@ -135,6 +149,13 @@ public class ItemTransferExecutor {
     // Active nearest target cache: routes items directly to the active filling container in O(1)
     private static final Map<ItemKey, IItemHandler> ACTIVE_TARGET_BY_ITEM = 
             Collections.synchronizedMap(new WeakHashMap<>());
+
+    // Cache max stack size per item to prevent BiggerStacks mod's heavy Thread.getStackTrace() overhead
+    private static final Map<ItemKey, Integer> ITEM_MAX_STACK_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static int getMaxStackSizeFast(ItemStack stack, ItemKey key) {
+        return ITEM_MAX_STACK_CACHE.computeIfAbsent(key, k -> stack.getMaxStackSize());
+    }
 
     /**
      * 超高速スタック判定 (Forge の CapabilityProvider.areCapsCompatible / gatherCapabilities を完全バイパス)
@@ -181,6 +202,7 @@ public class ItemTransferExecutor {
         if (slots <= 0) return stack;
 
         int initialCount = stack.getCount();
+        int maxStack = getMaxStackSizeFast(stack, itemKey);
 
         // [Fast Path 1: アイテム別 Last-Hit Direct Insert ($O(1)$)]
         if (state != null) {
@@ -190,7 +212,7 @@ public class ItemTransferExecutor {
                 if (lastSlot >= 0 && lastSlot < slots) {
                     ItemStack inLastSlot = target.getStackInSlot(lastSlot);
                     if (!inLastSlot.isEmpty() && canItemsStackFast(stack, inLastSlot)) {
-                        if (inLastSlot.getCount() < inLastSlot.getMaxStackSize() && inLastSlot.getCount() < target.getSlotLimit(lastSlot)) {
+                        if (inLastSlot.getCount() < maxStack && inLastSlot.getCount() < target.getSlotLimit(lastSlot)) {
                             int countBefore = stack.getCount();
                             stack = target.insertItem(lastSlot, stack, simulate);
                             if (stack.getCount() < countBefore) {
@@ -223,8 +245,8 @@ public class ItemTransferExecutor {
                     foundEmptySlot = i;
                 }
             } else if (canItemsStackFast(stack, inSlot)) {
-                // Skip full slots immediately without invoking heavy insertItem simulation
-                if (inSlot.getCount() >= inSlot.getMaxStackSize() || inSlot.getCount() >= target.getSlotLimit(i)) {
+                // Skip full slots immediately without invoking heavy insertItem simulation or BiggerStacks getStackTrace()
+                if (inSlot.getCount() >= maxStack || inSlot.getCount() >= target.getSlotLimit(i)) {
                     continue;
                 }
                 int countBefore = stack.getCount();
@@ -287,6 +309,21 @@ public class ItemTransferExecutor {
             @Nullable Set<IItemHandler> receivedHandlers,
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, currentTick, persistentCache, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -404,6 +441,14 @@ public class ItemTransferExecutor {
                         receivedHandlers.add(target);
                     }
                     targetState.fullItems.remove(itemKey);
+
+                    // ユーザー要望：どこにターゲッティングして移動したかを詳細ログ出力
+                    net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
+                    net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
+                    String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
+                    String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
+                    String itemName = actuallyExtracted.getHoverName().getString();
+                    UUPLogger.info(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
                 }
 
                 // Minimal rollback in rare edge cases
