@@ -43,6 +43,11 @@ public class NetworkController {
     private BlockPos lowestPipePos = null;
     private boolean networkDirty = true;
 
+    // Persistent Tick-to-Tick Rejection & Full Caches (TTL: 10 ticks = 0.5s)
+    private final Map<IItemHandler, Map<ItemTransferExecutor.ItemKey, Long>> itemRejectionCache = new IdentityHashMap<>();
+    private final Map<IFluidHandler, Map<net.minecraft.world.level.material.Fluid, Long>> fluidRejectionCache = new IdentityHashMap<>();
+    private final Map<IEnergyStorage, Long> energyRejectionCache = new IdentityHashMap<>();
+
     public NetworkController() {
     }
 
@@ -107,6 +112,9 @@ public class NetworkController {
         cachedPipes.clear();
         scannedNodePositions.clear();
         foundControllers.clear();
+        itemRejectionCache.clear();
+        fluidRejectionCache.clear();
+        energyRejectionCache.clear();
         lowestPipePos = null;
 
         Queue<BlockPos> queue = new ArrayDeque<>();
@@ -430,9 +438,10 @@ public class NetworkController {
         }
 
         // 4. Execute transfers between extractors and injectors
-        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, itemInjectors, effectiveOverclocks);
-        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, fluidInjectors, effectiveOverclocks);
-        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, energyInjectors, effectiveOverclocks);
+        long currentTick = level.getGameTime();
+        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, itemInjectors, effectiveOverclocks, currentTick, itemRejectionCache);
+        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, fluidInjectors, effectiveOverclocks, currentTick, fluidRejectionCache);
+        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, energyInjectors, effectiveOverclocks, currentTick, energyRejectionCache);
         EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);
         GasTransferExecutor.executeAllTransfers(
                 gasInjectors, gasExtractors,

@@ -25,6 +25,16 @@ public class ItemTransferExecutor {
             List<IItemHandler> injectors,
             int overclocks
     ) {
+        executeAllItemTransfers(extractors, injectors, overclocks, 0L, null);
+    }
+
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
@@ -46,7 +56,9 @@ public class ItemTransferExecutor {
                     "UUP_Extract",
                     "UUP_Insert",
                     sharedRejectedMap,
-                    receivedInThisTick
+                    receivedInThisTick,
+                    currentTick,
+                    persistentRejectionCache
             );
         }
     }
@@ -58,7 +70,7 @@ public class ItemTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null);
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null, 0L, null);
     }
 
     public static long executeTransfer(
@@ -69,6 +81,20 @@ public class ItemTransferExecutor {
             String targetLabel,
             @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
             @Nullable Set<IItemHandler> receivedHandlers
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -105,7 +131,18 @@ public class ItemTransferExecutor {
             for (IItemHandler target : validTargets) {
                 if (movedTotal >= maxToMove) break;
 
-                // [Optimization 1] O(1) キャッシュチェック: ターゲットがこのアイテムを拒否済みなら即スキップ
+                // [Optimization 1] 永続的TTLキャッシュチェック (TTL 10 Tick = 0.5秒)
+                if (persistentCache != null) {
+                    Map<ItemKey, Long> targetCache = persistentCache.get(target);
+                    if (targetCache != null) {
+                        Long expireTick = targetCache.get(itemKey);
+                        if (expireTick != null && currentTick < expireTick) {
+                            continue; // TTL内ならシミュレーション一切なしで即スキップ！
+                        }
+                    }
+                }
+
+                // [Optimization 2] 同一Tick内共有キャッシュチェック
                 Set<ItemKey> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(itemKey)) {
                     continue;
@@ -125,8 +162,11 @@ public class ItemTransferExecutor {
                 ItemStack remainder = ItemHandlerHelper.insertItemStacked(target, simulatedExtract, true);
                 int accepted = simulatedExtract.getCount() - remainder.getCount();
                 if (accepted <= 0) {
-                    // [Optimization 2] 受け入れ拒否されたアイテムをキャッシュに登録し、次回以降 O(1) で即スキップ
+                    // [Optimization 3] 受け入れ拒否されたアイテムをTick内＆TTLキャッシュに登録
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+                    if (persistentCache != null) {
+                        persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(itemKey, currentTick + 10L);
+                    }
                     continue;
                 }
 
@@ -137,8 +177,15 @@ public class ItemTransferExecutor {
                     int actuallyMoved = actuallyExtracted.getCount() - insertedRemainder.getCount();
                     movedTotal += actuallyMoved;
 
-                    if (actuallyMoved > 0 && receivedHandlers != null) {
-                        receivedHandlers.add(target);
+                    if (actuallyMoved > 0) {
+                        if (receivedHandlers != null) {
+                            receivedHandlers.add(target);
+                        }
+                        // [Optimization 4] 転送成功時: インベントリ空き状況が更新されたため即座にキャッシュ無効化（ゼロ遅延）
+                        if (persistentCache != null) {
+                            persistentCache.remove(target);
+                            persistentCache.remove(sourceHandler);
+                        }
                     }
 
                     // 挿入しきれなかった余りをソースにロールバック
