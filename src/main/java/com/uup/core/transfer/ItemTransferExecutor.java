@@ -86,7 +86,7 @@ public class ItemTransferExecutor {
     }
 
     private static class TargetState {
-        int lastSlot = -1;
+        final Map<ItemKey, Integer> lastSlotByItem = new HashMap<>();
         int firstEmptySlot = 0;
     }
 
@@ -94,14 +94,22 @@ public class ItemTransferExecutor {
             Collections.synchronizedMap(new WeakHashMap<>());
 
     /**
-     * 高速スタック判定 (Forge の areCapsCompatible によるイベント発火を完全バイパス)
-     * スタック可能アイテムにおいては、Vanilla の Item/Damage/NBT 一致判定で 100% 安全かつ超高速に判定可能。
+     * 超高速スタック判定 (Forge の CapabilityProvider.areCapsCompatible / gatherCapabilities を完全バイパス)
+     * Forge は ItemStack.isSameItemSameTags の末尾に areCapsCompatible を注入しており、
+     * これが毎スロット ForgeEventFactory.gatherCapabilities を発火させて 11秒ものCPU時間を消費していた。
+     * 本メソッドは Item, DamageValue, NBTTag の完全一致のみを純粋に判定し、Forge イベント発火を完全ゼロにする。
      */
     public static boolean canItemsStackFast(ItemStack a, ItemStack b) {
         if (a.isEmpty() || b.isEmpty()) return false;
         if (a.getItem() != b.getItem()) return false;
         if (a.getDamageValue() != b.getDamageValue()) return false;
-        return ItemStack.isSameItemSameTags(a, b);
+        
+        CompoundTag tagA = a.getTag();
+        CompoundTag tagB = b.getTag();
+        if (tagA == null) {
+            return tagB == null;
+        }
+        return tagA.equals(tagB);
     }
 
     /**
@@ -110,32 +118,40 @@ public class ItemTransferExecutor {
      *
      * @param target 挿入先インベントリ
      * @param stack 挿入するアイテム
-     * @param state ターゲット状態キャッシュ (lastSlot, firstEmptySlot)
+     * @param state ターゲット状態キャッシュ (lastSlotByItem, firstEmptySlot)
+     * @param itemKey アイテム識別キー
      * @return 挿入しきれなかった余り (全量入れば ItemStack.EMPTY)
      */
-    public static ItemStack fastInsertItemStacked(IItemHandler target, ItemStack stack, @Nullable TargetState state) {
+    public static ItemStack fastInsertItemStacked(IItemHandler target, ItemStack stack, @Nullable TargetState state, ItemKey itemKey) {
         if (target == null || stack.isEmpty()) return stack;
         int slots = target.getSlots();
         if (slots <= 0) return stack;
 
-        // [Fast Path 1: Last-Hit Direct Insert]
-        // 直前スロットに同一アイテムをそのまま追加できる場合、全スロット探索とリフレクションを完全回避 ($O(1)$)
-        if (state != null && state.lastSlot >= 0 && state.lastSlot < slots) {
-            int lastSlot = state.lastSlot;
-            ItemStack inLastSlot = target.getStackInSlot(lastSlot);
-            if (!inLastSlot.isEmpty() && canItemsStackFast(stack, inLastSlot)) {
-                int countBefore = stack.getCount();
-                stack = target.insertItem(lastSlot, stack, false);
-                if (stack.getCount() < countBefore) {
-                    if (stack.isEmpty()) {
-                        return ItemStack.EMPTY;
+        // [Fast Path 1: アイテム別 Last-Hit Direct Insert ($O(1)$)]
+        // 複数アイテムが混在していても、アイテムごとに直前スロットを記憶しているため確実にヒット！
+        if (state != null) {
+            Integer lastSlotObj = state.lastSlotByItem.get(itemKey);
+            if (lastSlotObj != null) {
+                int lastSlot = lastSlotObj;
+                if (lastSlot >= 0 && lastSlot < slots) {
+                    ItemStack inLastSlot = target.getStackInSlot(lastSlot);
+                    if (!inLastSlot.isEmpty() && canItemsStackFast(stack, inLastSlot)) {
+                        int countBefore = stack.getCount();
+                        stack = target.insertItem(lastSlot, stack, false);
+                        if (stack.getCount() < countBefore) {
+                            if (stack.isEmpty()) {
+                                return ItemStack.EMPTY;
+                            }
+                        } else {
+                            // そのスロットが満杯になったためキャッシュから除外
+                            state.lastSlotByItem.remove(itemKey);
+                        }
+                    } else {
+                        state.lastSlotByItem.remove(itemKey);
                     }
                 } else {
-                    // スロットが満杯になったためリセット
-                    state.lastSlot = -1;
+                    state.lastSlotByItem.remove(itemKey);
                 }
-            } else {
-                state.lastSlot = -1;
             }
         }
 
@@ -155,7 +171,7 @@ public class ItemTransferExecutor {
                 stack = target.insertItem(i, stack, false);
                 if (stack.getCount() < countBefore) {
                     if (state != null) {
-                        state.lastSlot = i;
+                        state.lastSlotByItem.put(itemKey, i);
                     }
                     if (stack.isEmpty()) {
                         return ItemStack.EMPTY;
@@ -180,7 +196,7 @@ public class ItemTransferExecutor {
                     stack = target.insertItem(i, stack, false);
                     if (stack.getCount() < countBefore) {
                         if (state != null) {
-                            state.lastSlot = i;
+                            state.lastSlotByItem.put(itemKey, i);
                             state.firstEmptySlot = i + 1; // このスロットが埋まったため次へ進める
                         }
                         if (stack.isEmpty()) {
@@ -269,7 +285,7 @@ public class ItemTransferExecutor {
                 if (actuallyExtracted.isEmpty()) break;
 
                 TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
-                ItemStack remainder = fastInsertItemStacked(target, actuallyExtracted, targetState);
+                ItemStack remainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey);
                 int actuallyMoved = actuallyExtracted.getCount() - remainder.getCount();
 
                 if (actuallyMoved > 0) {
