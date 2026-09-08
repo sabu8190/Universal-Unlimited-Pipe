@@ -3,6 +3,7 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.capability.IFluidHandler;
@@ -27,20 +28,63 @@ public class FluidTransferExecutor {
             long currentTick,
             @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentFluidCache
     ) {
+        executeAllFluidTransfers(extractors, injectors, overclocks, currentTick, persistentFluidCache, null, null);
+    }
+
+    public static void executeAllFluidTransfers(
+            List<IFluidHandler> extractors,
+            List<IFluidHandler> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentFluidCache,
+            @Nullable Map<Object, BlockPos> handlerPositions,
+            @Nullable Map<Object, Integer> handlerPriorities
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
 
         Map<IFluidHandler, Set<Fluid>> sharedRejectedMap = new IdentityHashMap<>();
         Set<IFluidHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<IFluidHandler, List<IFluidHandler>> sortedTargetsCache = new IdentityHashMap<>();
 
         for (IFluidHandler extractor : extractors) {
             if (extractor == null) continue;
             if (receivedInThisTick.contains(extractor)) continue;
 
+            List<IFluidHandler> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
+                List<IFluidHandler> list = new ArrayList<>(injectors.size());
+                for (IFluidHandler target : injectors) {
+                    if (target != null && target != ext) {
+                        list.add(target);
+                    }
+                }
+                if (list.size() > 1) {
+                    BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
+                    list.sort((t1, t2) -> {
+                        int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
+                        int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;
+                        if (p1 != p2) return Integer.compare(p2, p1); // 優先度降順
+                        if (srcPos != null && handlerPositions != null) {
+                            BlockPos pos1 = handlerPositions.get(t1);
+                            BlockPos pos2 = handlerPositions.get(t2);
+                            if (pos1 != null && pos2 != null) {
+                                double d1 = srcPos.distSqr(pos1);
+                                double d2 = srcPos.distSqr(pos2);
+                                int cmp = Double.compare(d1, d2);
+                                if (cmp != 0) return cmp; // 距離昇順
+                                return pos1.compareTo(pos2);
+                            }
+                        }
+                        return 0;
+                    });
+                }
+                return list;
+            });
+
             executeTransfer(
                     extractor,
-                    injectors,
+                    sortedTargets,
                     overclocks,
                     "UUP_Fluid_Extract",
                     "UUP_Fluid_Insert",

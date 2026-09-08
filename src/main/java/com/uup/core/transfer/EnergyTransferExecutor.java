@@ -3,13 +3,11 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
+import net.minecraft.core.BlockPos;
 import net.minecraftforge.energy.IEnergyStorage;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 public class EnergyTransferExecutor {
 
@@ -28,19 +26,62 @@ public class EnergyTransferExecutor {
             long currentTick,
             @Nullable java.util.Map<IEnergyStorage, Long> persistentEnergyCache
     ) {
+        executeAllEnergyTransfers(extractors, injectors, overclocks, currentTick, persistentEnergyCache, null, null);
+    }
+
+    public static void executeAllEnergyTransfers(
+            List<IEnergyStorage> extractors,
+            List<IEnergyStorage> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable java.util.Map<IEnergyStorage, Long> persistentEnergyCache,
+            @Nullable Map<Object, BlockPos> handlerPositions,
+            @Nullable Map<Object, Integer> handlerPriorities
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
 
         Set<IEnergyStorage> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<IEnergyStorage, List<IEnergyStorage>> sortedTargetsCache = new IdentityHashMap<>();
 
         for (IEnergyStorage extractor : extractors) {
             if (extractor == null) continue;
             if (receivedInThisTick.contains(extractor)) continue;
 
+            List<IEnergyStorage> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
+                List<IEnergyStorage> list = new ArrayList<>(injectors.size());
+                for (IEnergyStorage target : injectors) {
+                    if (target != null && target != ext) {
+                        list.add(target);
+                    }
+                }
+                if (list.size() > 1) {
+                    BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
+                    list.sort((t1, t2) -> {
+                        int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
+                        int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;
+                        if (p1 != p2) return Integer.compare(p2, p1); // 優先度降順
+                        if (srcPos != null && handlerPositions != null) {
+                            BlockPos pos1 = handlerPositions.get(t1);
+                            BlockPos pos2 = handlerPositions.get(t2);
+                            if (pos1 != null && pos2 != null) {
+                                double d1 = srcPos.distSqr(pos1);
+                                double d2 = srcPos.distSqr(pos2);
+                                int cmp = Double.compare(d1, d2);
+                                if (cmp != 0) return cmp; // 距離昇順
+                                return pos1.compareTo(pos2);
+                            }
+                        }
+                        return 0;
+                    });
+                }
+                return list;
+            });
+
             executeTransfer(
                     extractor,
-                    injectors,
+                    sortedTargets,
                     overclocks,
                     "UUP_Energy_Extract",
                     "UUP_Energy_Insert",

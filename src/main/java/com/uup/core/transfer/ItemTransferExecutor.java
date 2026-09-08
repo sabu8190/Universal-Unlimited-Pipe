@@ -3,6 +3,7 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -35,12 +36,27 @@ public class ItemTransferExecutor {
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache
     ) {
+        executeAllItemTransfers(extractors, injectors, overclocks, currentTick, persistentRejectionCache, null, null);
+    }
+
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> injectors,
+            int overclocks,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache,
+            @Nullable Map<Object, BlockPos> handlerPositions,
+            @Nullable Map<Object, Integer> handlerPriorities
+    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
 
         Map<IItemHandler, Set<ItemKey>> sharedRejectedMap = new IdentityHashMap<>();
         Set<IItemHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        // 各 extractor ごとにソート済みターゲットリストをキャッシュ（同一Tick内で再利用）
+        Map<IItemHandler, List<IItemHandler>> sortedTargetsCache = new IdentityHashMap<>();
 
         for (IItemHandler extractor : extractors) {
             if (extractor == null) continue;
@@ -49,9 +65,39 @@ public class ItemTransferExecutor {
                 continue;
             }
 
+            List<IItemHandler> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
+                List<IItemHandler> list = new ArrayList<>(injectors.size());
+                for (IItemHandler target : injectors) {
+                    if (target != null && target != ext) {
+                        list.add(target);
+                    }
+                }
+                if (list.size() > 1) {
+                    BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
+                    list.sort((t1, t2) -> {
+                        int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
+                        int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;
+                        if (p1 != p2) return Integer.compare(p2, p1); // 優先度降順 (高い順)
+                        if (srcPos != null && handlerPositions != null) {
+                            BlockPos pos1 = handlerPositions.get(t1);
+                            BlockPos pos2 = handlerPositions.get(t2);
+                            if (pos1 != null && pos2 != null) {
+                                double d1 = srcPos.distSqr(pos1);
+                                double d2 = srcPos.distSqr(pos2);
+                                int cmp = Double.compare(d1, d2);
+                                if (cmp != 0) return cmp; // 距離昇順 (搬出元から近い順)
+                                return pos1.compareTo(pos2); // 決定論的順序
+                            }
+                        }
+                        return 0;
+                    });
+                }
+                return list;
+            });
+
             executeTransfer(
                     extractor,
-                    injectors,
+                    sortedTargets,
                     overclocks,
                     "UUP_Extract",
                     "UUP_Insert",
