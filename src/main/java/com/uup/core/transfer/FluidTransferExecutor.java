@@ -17,7 +17,7 @@ public class FluidTransferExecutor {
             List<IFluidHandler> injectors,
             int overclocks
     ) {
-        executeAllFluidTransfers(extractors, injectors, overclocks, 0L, null);
+        executeAllFluidTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
     }
 
     public static void executeAllFluidTransfers(
@@ -27,25 +27,58 @@ public class FluidTransferExecutor {
             long currentTick,
             @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentFluidCache
     ) {
-        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+        executeAllFluidTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
+    }
+
+    public static void executeAllFluidTransfers(
+            List<IFluidHandler> extractors,
+            List<IFluidHandler> storageInjectors,
+            List<IFluidHandler> machineInjectors,
+            @Nullable Set<Object> storageHandlers,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty()) {
             return;
+        }
+        boolean hasStorage = storageInjectors != null && !storageInjectors.isEmpty();
+        boolean hasMachine = machineInjectors != null && !machineInjectors.isEmpty();
+        if (!hasStorage && !hasMachine) {
+            return;
+        }
+
+        List<IFluidHandler> allInjectors;
+        if (!hasMachine) {
+            allInjectors = storageInjectors;
+        } else if (!hasStorage) {
+            allInjectors = machineInjectors;
+        } else {
+            allInjectors = new ArrayList<>(storageInjectors.size() + machineInjectors.size());
+            allInjectors.addAll(storageInjectors);
+            allInjectors.addAll(machineInjectors);
         }
 
         Map<IFluidHandler, Set<Fluid>> sharedRejectedMap = new IdentityHashMap<>();
         Set<IFluidHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
 
         for (IFluidHandler extractor : extractors) {
-            if (extractor == null) continue;
-            if (receivedInThisTick.contains(extractor)) continue;
+            if (extractor == null || receivedInThisTick.contains(extractor)) {
+                continue;
+            }
+
+            boolean isStorage = storageHandlers != null && storageHandlers.contains(extractor);
+            List<IFluidHandler> targets = isStorage ? allInjectors : storageInjectors;
+            if (targets == null || targets.isEmpty()) continue;
 
             executeTransfer(
                     extractor,
-                    injectors,
+                    targets,
                     overclocks,
                     "UUP_Fluid_Extract",
                     "UUP_Fluid_Insert",
                     sharedRejectedMap,
-                    receivedInThisTick
+                    receivedInThisTick,
+                    0L,
+                    null
             );
         }
     }
@@ -60,7 +93,17 @@ public class FluidTransferExecutor {
         return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null, 0L, null);
     }
 
-
+    public static long executeTransfer(
+            IFluidHandler sourceHandler,
+            List<IFluidHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IFluidHandler, Set<Fluid>> sharedRejectedMap,
+            @Nullable Set<IFluidHandler> receivedHandlers
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
+    }
 
     public static long executeTransfer(
             IFluidHandler sourceHandler,
@@ -72,18 +115,6 @@ public class FluidTransferExecutor {
             @Nullable Set<IFluidHandler> receivedHandlers,
             long currentTick,
             @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentCache
-    ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers);
-    }
-
-    public static long executeTransfer(
-            IFluidHandler sourceHandler,
-            List<IFluidHandler> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Map<IFluidHandler, Set<Fluid>> sharedRejectedMap,
-            @Nullable Set<IFluidHandler> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -120,6 +151,16 @@ public class FluidTransferExecutor {
                 for (IFluidHandler target : validTargets) {
                     if (filledTotal >= maxToMove) break;
 
+                    if (persistentCache != null) {
+                        Map<Fluid, Long> targetCache = persistentCache.get(target);
+                        if (targetCache != null) {
+                            Long expireTick = targetCache.get(fluid);
+                            if (expireTick != null && currentTick < expireTick) {
+                                continue;
+                            }
+                        }
+                    }
+
                     Set<Fluid> rejected = rejectedMap.get(target);
                     if (rejected != null && rejected.contains(fluid)) {
                         continue;
@@ -134,6 +175,9 @@ public class FluidTransferExecutor {
                     int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
                     if (canAccept <= 0) {
                         rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
+                        if (persistentCache != null) {
+                            persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(fluid, currentTick + 10L);
+                        }
                         continue;
                     }
 
@@ -153,6 +197,10 @@ public class FluidTransferExecutor {
                     if (accepted > 0) {
                         if (receivedHandlers != null) {
                             receivedHandlers.add(target);
+                        }
+                        if (persistentCache != null) {
+                            persistentCache.remove(target);
+                            persistentCache.remove(sourceHandler);
                         }
                     }
 
@@ -174,6 +222,16 @@ public class FluidTransferExecutor {
                 if (sample.isEmpty()) break;
                 Fluid fluid = sample.getFluid();
 
+                if (persistentCache != null) {
+                    Map<Fluid, Long> targetCache = persistentCache.get(target);
+                    if (targetCache != null) {
+                        Long expireTick = targetCache.get(fluid);
+                        if (expireTick != null && currentTick < expireTick) {
+                            continue;
+                        }
+                    }
+                }
+
                 Set<Fluid> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(fluid)) {
                     continue;
@@ -182,6 +240,9 @@ public class FluidTransferExecutor {
                 int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
                 if (canAccept <= 0) {
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
+                    if (persistentCache != null) {
+                        persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(fluid, currentTick + 10L);
+                    }
                     continue;
                 }
 
@@ -194,6 +255,10 @@ public class FluidTransferExecutor {
                 if (accepted > 0) {
                     if (receivedHandlers != null) {
                         receivedHandlers.add(target);
+                    }
+                    if (persistentCache != null) {
+                        persistentCache.remove(target);
+                        persistentCache.remove(sourceHandler);
                     }
                 }
 

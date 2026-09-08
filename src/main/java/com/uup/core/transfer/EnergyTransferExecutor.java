@@ -15,9 +15,8 @@ public class EnergyTransferExecutor {
             List<IEnergyStorage> injectors,
             int overclocks
     ) {
-        executeAllEnergyTransfers(extractors, injectors, overclocks, 0L, null);
+        executeAllEnergyTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
     }
-
 
     public static void executeAllEnergyTransfers(
             List<IEnergyStorage> extractors,
@@ -26,23 +25,56 @@ public class EnergyTransferExecutor {
             long currentTick,
             @Nullable java.util.Map<IEnergyStorage, Long> persistentEnergyCache
     ) {
-        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+        executeAllEnergyTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
+    }
+
+    public static void executeAllEnergyTransfers(
+            List<IEnergyStorage> extractors,
+            List<IEnergyStorage> storageInjectors,
+            List<IEnergyStorage> machineInjectors,
+            @Nullable Set<Object> storageHandlers,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty()) {
             return;
+        }
+        boolean hasStorage = storageInjectors != null && !storageInjectors.isEmpty();
+        boolean hasMachine = machineInjectors != null && !machineInjectors.isEmpty();
+        if (!hasStorage && !hasMachine) {
+            return;
+        }
+
+        List<IEnergyStorage> allInjectors;
+        if (!hasMachine) {
+            allInjectors = storageInjectors;
+        } else if (!hasStorage) {
+            allInjectors = machineInjectors;
+        } else {
+            allInjectors = new ArrayList<>(storageInjectors.size() + machineInjectors.size());
+            allInjectors.addAll(storageInjectors);
+            allInjectors.addAll(machineInjectors);
         }
 
         Set<IEnergyStorage> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
 
         for (IEnergyStorage extractor : extractors) {
-            if (extractor == null) continue;
-            if (receivedInThisTick.contains(extractor)) continue;
+            if (extractor == null || receivedInThisTick.contains(extractor)) {
+                continue;
+            }
+
+            boolean isStorage = storageHandlers != null && storageHandlers.contains(extractor);
+            List<IEnergyStorage> targets = isStorage ? allInjectors : storageInjectors;
+            if (targets == null || targets.isEmpty()) continue;
 
             executeTransfer(
                     extractor,
-                    injectors,
+                    targets,
                     overclocks,
                     "UUP_Energy_Extract",
                     "UUP_Energy_Insert",
-                    receivedInThisTick
+                    receivedInThisTick,
+                    0L,
+                    null
             );
         }
     }
@@ -54,7 +86,18 @@ public class EnergyTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null);
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, 0L, null);
+    }
+
+    public static long executeTransfer(
+            IEnergyStorage sourceHandler,
+            List<IEnergyStorage> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Set<IEnergyStorage> receivedHandlers
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, receivedHandlers, 0L, null);
     }
 
     public static long executeTransfer(
@@ -66,17 +109,6 @@ public class EnergyTransferExecutor {
             @Nullable Set<IEnergyStorage> receivedHandlers,
             long currentTick,
             @Nullable java.util.Map<IEnergyStorage, Long> persistentCache
-    ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, receivedHandlers);
-    }
-
-    public static long executeTransfer(
-            IEnergyStorage sourceHandler,
-            List<IEnergyStorage> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Set<IEnergyStorage> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -97,9 +129,19 @@ public class EnergyTransferExecutor {
             if (target == sourceHandler) continue;
             if (transferredTotal >= maxToMove) break;
 
+            if (persistentCache != null) {
+                Long expireTick = persistentCache.get(target);
+                if (expireTick != null && currentTick < expireTick) {
+                    continue; // 満杯TTL内なら即スキップ
+                }
+            }
+
             // 1. Check target's immediate intake demand (Simulation)
             int canAccept = target.receiveEnergy(Integer.MAX_VALUE, true);
             if (canAccept <= 0) {
+                if (persistentCache != null) {
+                    persistentCache.put(target, currentTick + 10L);
+                }
                 continue;
             }
 
@@ -118,6 +160,10 @@ public class EnergyTransferExecutor {
             if (received > 0) {
                 if (receivedHandlers != null) {
                     receivedHandlers.add(target);
+                }
+                if (persistentCache != null) {
+                    persistentCache.remove(target);
+                    persistentCache.remove(sourceHandler);
                 }
             }
 

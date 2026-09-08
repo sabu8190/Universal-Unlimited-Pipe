@@ -25,7 +25,7 @@ public class ItemTransferExecutor {
             List<IItemHandler> injectors,
             int overclocks
     ) {
-        executeAllItemTransfers(extractors, injectors, overclocks, 0L, null);
+        executeAllItemTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
     }
 
     public static void executeAllItemTransfers(
@@ -35,27 +35,74 @@ public class ItemTransferExecutor {
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache
     ) {
-        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+        executeAllItemTransfers(extractors, injectors, Collections.emptyList(), Collections.emptySet(), overclocks);
+    }
+
+    /**
+     * Partitioned and intelligent item transfer execution.
+     * When extracting from a processing machine (e.g. Mekanism Smelting Factory), items are routed ONLY
+     * to storage containers (storageInjectors) sorted in Nearest-First order, completely bypassing
+     * non-storage machines (machineInjectors) and eliminating 10,000+ redundant simulations per tick.
+     *
+     * @param extractors Item source handlers
+     * @param storageInjectors Passive storage targets (Chests, Barrels, Drawers) pre-sorted Nearest-First
+     * @param machineInjectors Active machine targets (Processing machines, Furnaces)
+     * @param storageHandlers Set of handlers known to be passive storage
+     * @param overclocks Overclock multiplier level
+     */
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> storageInjectors,
+            List<IItemHandler> machineInjectors,
+            @Nullable Set<Object> storageHandlers,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty()) {
+            return;
+        }
+        boolean hasStorage = storageInjectors != null && !storageInjectors.isEmpty();
+        boolean hasMachine = machineInjectors != null && !machineInjectors.isEmpty();
+        if (!hasStorage && !hasMachine) {
             return;
         }
 
-        Map<IItemHandler, Set<ItemKey>> sharedRejectedMap = new IdentityHashMap<>();
+        List<IItemHandler> allInjectors;
+        if (!hasMachine) {
+            allInjectors = storageInjectors;
+        } else if (!hasStorage) {
+            allInjectors = machineInjectors;
+        } else {
+            allInjectors = new ArrayList<>(storageInjectors.size() + machineInjectors.size());
+            allInjectors.addAll(storageInjectors);
+            allInjectors.addAll(machineInjectors);
+        }
+
+        Map<IItemHandler, Set<ItemKey>> tickRejectedMap = new IdentityHashMap<>();
         Set<IItemHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
 
         for (IItemHandler extractor : extractors) {
             if (extractor == null) continue;
-            // ピンポン防止: 同一Tick内で既にアイテムを受け取ったインベントリからは搬出しない
+            // Ping-pong prevention: do not extract from an inventory that already received items this tick
             if (receivedInThisTick.contains(extractor)) {
                 continue;
             }
 
+            boolean isStorage = storageHandlers != null && storageHandlers.contains(extractor);
+
+            // [Core Optimization: Machine Loop Isolation]
+            // If the extractor is a processing machine, target ONLY storage containers (storageInjectors).
+            // This guarantees 0 simulation attempts against other processing machines!
+            // If the extractor is storage, allow delivering to all targets (both machines and other storages).
+            List<IItemHandler> targets = isStorage ? allInjectors : storageInjectors;
+            if (targets == null || targets.isEmpty()) continue;
+
             executeTransfer(
                     extractor,
-                    injectors,
+                    targets,
                     overclocks,
                     "UUP_Extract",
                     "UUP_Insert",
-                    sharedRejectedMap,
+                    tickRejectedMap,
                     receivedInThisTick
             );
         }
@@ -68,10 +115,20 @@ public class ItemTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null, 0L, null);
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null);
     }
 
-
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
+    }
 
     private static class TargetState {
         final Map<ItemKey, Integer> lastSlotByItem = new HashMap<>();
@@ -216,18 +273,6 @@ public class ItemTransferExecutor {
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers);
-    }
-
-    public static long executeTransfer(
-            IItemHandler sourceHandler,
-            List<IItemHandler> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
-            @Nullable Set<IItemHandler> receivedHandlers
-    ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
@@ -260,10 +305,13 @@ public class ItemTransferExecutor {
 
             ItemKey itemKey = ItemKey.of(inSlot);
 
+            // [Strict Nearest-First Routing]
+            // Always try targets in exact pre-sorted order (closest chest first).
+            // Do not alter order by previous hits, ensuring closest containers are filled to 100% first.
             for (IItemHandler target : validTargets) {
                 if (movedTotal >= maxToMove) break;
 
-                // 同一Tick内共有キャッシュチェック (満杯と判明したターゲットは即スキップ)
+                // Intra-tick rejection check: skip targets already proven full for this item in THIS tick
                 Set<ItemKey> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(itemKey)) {
                     continue;
@@ -275,7 +323,7 @@ public class ItemTransferExecutor {
                 int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
                 if (currentLimit <= 0) break;
 
-                // [Optimization: 事前シミュレーション確認による無駄抽出＆ロールバックの完全根絶]
+                // [Simulation verification: 0 wasted extraction and 0 unnecessary rollbacks]
                 ItemStack probeStack = currentInSlot.copy();
                 probeStack.setCount(currentLimit);
 
@@ -284,16 +332,16 @@ public class ItemTransferExecutor {
                 int accepted = currentLimit - simRemainder.getCount();
 
                 if (accepted <= 0) {
-                    // 全く受け入れられない場合: 同一Tick内の拒絶キャッシュに登録
+                    // Mark as rejected only within the current tick to prevent target hopping across ticks
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
                     continue;
                 }
 
-                // 確実に受け入れられる分だけをソースから本番抽出！
+                // Extract only what is guaranteed to be accepted
                 ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
                 if (actuallyExtracted.isEmpty()) break;
 
-                // ターゲットへ本番挿入 (simulate=false)
+                // Insert into target
                 ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
                 int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
 
@@ -305,7 +353,7 @@ public class ItemTransferExecutor {
                     TARGET_STATE_CACHE.remove(sourceHandler);
                 }
 
-                // 万が一の極小余りのみロールバック
+                // Minimal rollback in rare edge cases
                 if (!realRemainder.isEmpty()) {
                     sourceHandler.insertItem(slot, realRemainder, false);
                 }
