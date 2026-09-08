@@ -93,6 +93,14 @@ public class ItemTransferExecutor {
     private static final Map<IItemHandler, TargetState> TARGET_STATE_CACHE = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
+    // アイテムごとの優先ターゲット記憶 (Preferred Target Routing: 200ターゲットの総当たり走査を O(1) 直行化)
+    private static final Map<ItemKey, IItemHandler> PREFERRED_TARGET_BY_ITEM = 
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    // 空インベントリスキップキャッシュ (Empty Source Cache: TTL 5 Tick = 0.25秒で無駄な全スロット走査を完全スキップ)
+    private static final Map<IItemHandler, Long> EMPTY_SOURCE_CACHE = 
+            Collections.synchronizedMap(new WeakHashMap<>());
+
     /**
      * 超高速スタック判定 (Forge の CapabilityProvider.areCapsCompatible / gatherCapabilities を完全バイパス)
      * Forge は ItemStack.isSameItemSameTags の末尾に areCapsCompatible を注入しており、
@@ -120,9 +128,16 @@ public class ItemTransferExecutor {
      * @param stack 挿入するアイテム
      * @param state ターゲット状態キャッシュ (lastSlotByItem, firstEmptySlot)
      * @param itemKey アイテム識別キー
+     * @param simulate シミュレーション実行フラグ (true の場合は状態更新を行わない)
      * @return 挿入しきれなかった余り (全量入れば ItemStack.EMPTY)
      */
-    public static ItemStack fastInsertItemStacked(IItemHandler target, ItemStack stack, @Nullable TargetState state, ItemKey itemKey) {
+    public static ItemStack fastInsertItemStacked(
+            IItemHandler target,
+            ItemStack stack,
+            @Nullable TargetState state,
+            ItemKey itemKey,
+            boolean simulate
+    ) {
         if (target == null || stack.isEmpty()) return stack;
         int slots = target.getSlots();
         if (slots <= 0) return stack;
@@ -137,19 +152,19 @@ public class ItemTransferExecutor {
                     ItemStack inLastSlot = target.getStackInSlot(lastSlot);
                     if (!inLastSlot.isEmpty() && canItemsStackFast(stack, inLastSlot)) {
                         int countBefore = stack.getCount();
-                        stack = target.insertItem(lastSlot, stack, false);
+                        stack = target.insertItem(lastSlot, stack, simulate);
                         if (stack.getCount() < countBefore) {
                             if (stack.isEmpty()) {
                                 return ItemStack.EMPTY;
                             }
-                        } else {
+                        } else if (!simulate) {
                             // そのスロットが満杯になったためキャッシュから除外
                             state.lastSlotByItem.remove(itemKey);
                         }
-                    } else {
+                    } else if (!simulate) {
                         state.lastSlotByItem.remove(itemKey);
                     }
-                } else {
+                } else if (!simulate) {
                     state.lastSlotByItem.remove(itemKey);
                 }
             }
@@ -168,9 +183,9 @@ public class ItemTransferExecutor {
                 }
             } else if (canItemsStackFast(stack, inSlot)) {
                 int countBefore = stack.getCount();
-                stack = target.insertItem(i, stack, false);
+                stack = target.insertItem(i, stack, simulate);
                 if (stack.getCount() < countBefore) {
-                    if (state != null) {
+                    if (state != null && !simulate) {
                         state.lastSlotByItem.put(itemKey, i);
                     }
                     if (stack.isEmpty()) {
@@ -181,7 +196,7 @@ public class ItemTransferExecutor {
         }
 
         // 空きスロットの追跡ポインタを更新
-        if (foundEmptySlot != -1 && state != null) {
+        if (foundEmptySlot != -1 && state != null && !simulate) {
             state.firstEmptySlot = foundEmptySlot;
         }
 
@@ -193,9 +208,9 @@ public class ItemTransferExecutor {
                 ItemStack inSlot = target.getStackInSlot(i);
                 if (inSlot.isEmpty()) {
                     int countBefore = stack.getCount();
-                    stack = target.insertItem(i, stack, false);
+                    stack = target.insertItem(i, stack, simulate);
                     if (stack.getCount() < countBefore) {
-                        if (state != null) {
+                        if (state != null && !simulate) {
                             state.lastSlotByItem.put(itemKey, i);
                             state.firstEmptySlot = i + 1; // このスロットが埋まったため次へ進める
                         }
@@ -225,6 +240,15 @@ public class ItemTransferExecutor {
             return 0;
         }
 
+        // [Optimization A: Empty Source Cache Check]
+        // 直前チェックで完全に空だったインベントリは 5 Tick (0.25秒) スキップして無駄な getStackInSlot を排除
+        if (currentTick > 0) {
+            Long emptyUntil = EMPTY_SOURCE_CACHE.get(sourceHandler);
+            if (emptyUntil != null && currentTick < emptyUntil) {
+                return 0;
+            }
+        }
+
         int baseRate = ModConfig.COMMON != null && ModConfig.COMMON.baseItemTransferRate != null 
                 ? ModConfig.COMMON.baseItemTransferRate.get() : Integer.MAX_VALUE;
         double multiplier = ModConfig.COMMON != null && ModConfig.COMMON.overclockItemMultiplier != null 
@@ -247,13 +271,38 @@ public class ItemTransferExecutor {
         }
         if (validTargets.isEmpty()) return 0;
 
+        boolean hasAnyItem = false;
+
         for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
+            hasAnyItem = true;
 
             ItemKey itemKey = ItemKey.of(inSlot);
 
-            for (IItemHandler target : validTargets) {
+            // [Optimization B: Preferred Target Routing]
+            // このアイテム種別を直前に受け入れ成功したターゲットを優先して先頭に配置
+            IItemHandler preferredTarget = PREFERRED_TARGET_BY_ITEM.get(itemKey);
+            if (preferredTarget != null && (preferredTarget == sourceHandler || !validTargets.contains(preferredTarget))) {
+                PREFERRED_TARGET_BY_ITEM.remove(itemKey);
+                preferredTarget = null;
+            }
+
+            // 探索ターゲットリストの構築: preferredTarget があれば最優先で試行
+            List<IItemHandler> targetsToTry;
+            if (preferredTarget != null) {
+                targetsToTry = new ArrayList<>(validTargets.size());
+                targetsToTry.add(preferredTarget);
+                for (IItemHandler t : validTargets) {
+                    if (t != preferredTarget) {
+                        targetsToTry.add(t);
+                    }
+                }
+            } else {
+                targetsToTry = validTargets;
+            }
+
+            for (IItemHandler target : targetsToTry) {
                 if (movedTotal >= maxToMove) break;
 
                 // [Optimization 1] 永続的TTLキャッシュチェック (TTL 10 Tick = 0.5秒)
@@ -279,43 +328,51 @@ public class ItemTransferExecutor {
                 int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
                 if (currentLimit <= 0) break;
 
-                // [Optimization 3: 1パス直抽出 & Last-Hit Fast Path 挿入]
-                // シミュレーション二重走査 (simulate=true) を完全廃止し、直接抽出して target へ高速挿入
-                ItemStack actuallyExtracted = sourceHandler.extractItem(slot, currentLimit, false);
-                if (actuallyExtracted.isEmpty()) break;
+                // [Optimization 3: 事前シミュレーション確認による無駄抽出＆ロールバックの完全根絶]
+                // ターゲットが確実に受け入れ可能な数量 (accepted) をシミュレーションで確認
+                ItemStack probeStack = currentInSlot.copy();
+                probeStack.setCount(currentLimit);
 
                 TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
-                ItemStack remainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey);
-                int actuallyMoved = actuallyExtracted.getCount() - remainder.getCount();
+                ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true);
+                int accepted = currentLimit - simRemainder.getCount();
 
-                if (actuallyMoved > 0) {
-                    movedTotal += actuallyMoved;
-                    if (receivedHandlers != null) {
-                        receivedHandlers.add(target);
-                    }
-                    // 重要: target の拒絶キャッシュを消してはならない！
-                    // アイテムが入ったことで target の空きは減少したため、以前拒絶されたアイテムが入るようになることはない。
-                    // 逆に、sourceHandler からアイテムが引き抜かれたため、sourceHandler 側の空きが増加した可能性がある。
-                    // そのため、sourceHandler に対する拒絶キャッシュと状態キャッシュのみをクリアする！
-                    if (persistentCache != null) {
-                        persistentCache.remove(sourceHandler);
-                    }
-                    TARGET_STATE_CACHE.remove(sourceHandler);
-                } else {
-                    // 全く入らなかった場合: target はこの itemKey を拒絶した
+                if (accepted <= 0) {
+                    // 全く受け入れられない場合: ターゲットを拒絶キャッシュに登録
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
                     if (persistentCache != null) {
                         persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(itemKey, currentTick + 10L);
                     }
+                    if (target == preferredTarget) {
+                        PREFERRED_TARGET_BY_ITEM.remove(itemKey);
+                    }
+                    continue;
                 }
 
-                // 挿入しきれなかった余りをソーススロットに安全にロールバック
-                if (!remainder.isEmpty()) {
-                    ItemStack rollbackRemainder = sourceHandler.insertItem(slot, remainder, false);
-                    if (!rollbackRemainder.isEmpty()) {
-                        // 万が一元のスロットに戻せなかった場合のフォールバック
-                        ItemHandlerHelper.insertItemStacked(sourceHandler, rollbackRemainder, false);
+                // 確実に受け入れられる分だけをソースから本番抽出！
+                ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
+                if (actuallyExtracted.isEmpty()) break;
+
+                // ターゲットへ本番挿入 (simulate=false)
+                ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
+                int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
+
+                if (actuallyMoved > 0) {
+                    movedTotal += actuallyMoved;
+                    PREFERRED_TARGET_BY_ITEM.put(itemKey, target); // 優先ルーティングを記憶！
+                    if (receivedHandlers != null) {
+                        receivedHandlers.add(target);
                     }
+                    if (persistentCache != null) {
+                        persistentCache.remove(sourceHandler);
+                    }
+                    TARGET_STATE_CACHE.remove(sourceHandler);
+                    EMPTY_SOURCE_CACHE.remove(target); // ターゲットにアイテムが入ったため空キャッシュ解除
+                }
+
+                // 万が一の極小余りのみロールバック (事前確認済みのため通常は発生しない)
+                if (!realRemainder.isEmpty()) {
+                    sourceHandler.insertItem(slot, realRemainder, false);
                 }
 
                 // アイテムが入らなかった場合は次のターゲットを試す
@@ -328,6 +385,11 @@ public class ItemTransferExecutor {
                     break;
                 }
             }
+        }
+
+        // ソースインベントリが完全に空だった場合、次回の走査を 5 Tick (0.25秒) スキップ
+        if (!hasAnyItem && currentTick > 0) {
+            EMPTY_SOURCE_CACHE.put(sourceHandler, currentTick + 5L);
         }
 
         if (movedTotal > 0) {
