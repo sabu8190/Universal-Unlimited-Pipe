@@ -45,9 +45,7 @@ public class FluidTransferExecutor {
                     "UUP_Fluid_Extract",
                     "UUP_Fluid_Insert",
                     sharedRejectedMap,
-                    receivedInThisTick,
-                    currentTick,
-                    persistentFluidCache
+                    receivedInThisTick
             );
         }
     }
@@ -62,17 +60,7 @@ public class FluidTransferExecutor {
         return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null, 0L, null);
     }
 
-    public static long executeTransfer(
-            IFluidHandler sourceHandler,
-            List<IFluidHandler> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Map<IFluidHandler, Set<Fluid>> sharedRejectedMap,
-            @Nullable Set<IFluidHandler> receivedHandlers
-    ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
-    }
+
 
     public static long executeTransfer(
             IFluidHandler sourceHandler,
@@ -84,6 +72,18 @@ public class FluidTransferExecutor {
             @Nullable Set<IFluidHandler> receivedHandlers,
             long currentTick,
             @Nullable Map<IFluidHandler, Map<Fluid, Long>> persistentCache
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers);
+    }
+
+    public static long executeTransfer(
+            IFluidHandler sourceHandler,
+            List<IFluidHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IFluidHandler, Set<Fluid>> sharedRejectedMap,
+            @Nullable Set<IFluidHandler> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -120,16 +120,6 @@ public class FluidTransferExecutor {
                 for (IFluidHandler target : validTargets) {
                     if (filledTotal >= maxToMove) break;
 
-                    if (persistentCache != null) {
-                        Map<Fluid, Long> targetCache = persistentCache.get(target);
-                        if (targetCache != null) {
-                            Long expireTick = targetCache.get(fluid);
-                            if (expireTick != null && currentTick < expireTick) {
-                                continue;
-                            }
-                        }
-                    }
-
                     Set<Fluid> rejected = rejectedMap.get(target);
                     if (rejected != null && rejected.contains(fluid)) {
                         continue;
@@ -144,9 +134,6 @@ public class FluidTransferExecutor {
                     int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
                     if (canAccept <= 0) {
                         rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
-                        if (persistentCache != null) {
-                            persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(fluid, currentTick + 10L);
-                        }
                         continue;
                     }
 
@@ -166,10 +153,6 @@ public class FluidTransferExecutor {
                     if (accepted > 0) {
                         if (receivedHandlers != null) {
                             receivedHandlers.add(target);
-                        }
-                        if (persistentCache != null) {
-                            persistentCache.remove(target);
-                            persistentCache.remove(sourceHandler);
                         }
                     }
 
@@ -191,16 +174,6 @@ public class FluidTransferExecutor {
                 if (sample.isEmpty()) break;
                 Fluid fluid = sample.getFluid();
 
-                if (persistentCache != null) {
-                    Map<Fluid, Long> targetCache = persistentCache.get(target);
-                    if (targetCache != null) {
-                        Long expireTick = targetCache.get(fluid);
-                        if (expireTick != null && currentTick < expireTick) {
-                            continue;
-                        }
-                    }
-                }
-
                 Set<Fluid> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(fluid)) {
                     continue;
@@ -209,9 +182,6 @@ public class FluidTransferExecutor {
                 int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
                 if (canAccept <= 0) {
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
-                    if (persistentCache != null) {
-                        persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(fluid, currentTick + 10L);
-                    }
                     continue;
                 }
 
@@ -224,10 +194,6 @@ public class FluidTransferExecutor {
                 if (accepted > 0) {
                     if (receivedHandlers != null) {
                         receivedHandlers.add(target);
-                    }
-                    if (persistentCache != null) {
-                        persistentCache.remove(target);
-                        persistentCache.remove(sourceHandler);
                     }
                 }
 

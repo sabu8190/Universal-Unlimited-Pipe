@@ -27,6 +27,8 @@ import net.minecraftforge.energy.IEnergyStorage;
 import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.items.IItemHandler;
 
+import org.jetbrains.annotations.Nullable;
+
 import java.util.*;
 
 public class NetworkController {
@@ -43,10 +45,6 @@ public class NetworkController {
     private BlockPos lowestPipePos = null;
     private boolean networkDirty = true;
 
-    // Persistent Tick-to-Tick Rejection & Full Caches (TTL: 10 ticks = 0.5s)
-    private final Map<IItemHandler, Map<ItemTransferExecutor.ItemKey, Long>> itemRejectionCache = new IdentityHashMap<>();
-    private final Map<IFluidHandler, Map<net.minecraft.world.level.material.Fluid, Long>> fluidRejectionCache = new IdentityHashMap<>();
-    private final Map<IEnergyStorage, Long> energyRejectionCache = new IdentityHashMap<>();
 
     public NetworkController() {
     }
@@ -112,9 +110,6 @@ public class NetworkController {
         cachedPipes.clear();
         scannedNodePositions.clear();
         foundControllers.clear();
-        itemRejectionCache.clear();
-        fluidRejectionCache.clear();
-        energyRejectionCache.clear();
         lowestPipePos = null;
 
         Queue<BlockPos> queue = new ArrayDeque<>();
@@ -174,6 +169,19 @@ public class NetworkController {
         }
     }
 
+    public static boolean isStorageBlockEntity(@Nullable BlockEntity be) {
+        if (be == null) return false;
+        if (be instanceof net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity) return true;
+        String simpleName = be.getClass().getSimpleName();
+        return simpleName.contains("Chest") || 
+               simpleName.contains("Barrel") || 
+               simpleName.contains("Storage") || 
+               simpleName.contains("Drawer") || 
+               simpleName.contains("Vault") || 
+               simpleName.contains("Bin") ||
+               simpleName.contains("Crate");
+    }
+
     private static <T> void collectForgeCap(
             BlockEntity be,
             net.minecraftforge.common.capabilities.Capability<T> cap,
@@ -184,15 +192,18 @@ public class NetworkController {
             List<T> injectors,
             List<T> extractors,
             Map<Object, BlockPos> positions,
-            Map<Object, Integer> priorities
+            Map<Object, Integer> priorities,
+            Map<Object, Boolean> isStorageMap
     ) {
         if (be == null) return;
         BlockPos pos = be.getBlockPos();
+        boolean isStorage = isStorageBlockEntity(be);
         var opt = be.getCapability(cap, side);
         if (opt.isPresent()) {
             opt.ifPresent(handler -> {
                 if (positions != null) positions.put(handler, pos);
                 if (priorities != null) priorities.put(handler, Math.max(priorities.getOrDefault(handler, Integer.MIN_VALUE), priority));
+                if (isStorageMap != null) isStorageMap.put(handler, isStorage);
                 if (canInsert && !injectors.contains(handler)) injectors.add(handler);
                 if (canExtract && !extractors.contains(handler)) extractors.add(handler);
             });
@@ -200,6 +211,7 @@ public class NetworkController {
             be.getCapability(cap, null).ifPresent(handler -> {
                 if (positions != null) positions.put(handler, pos);
                 if (priorities != null) priorities.put(handler, Math.max(priorities.getOrDefault(handler, Integer.MIN_VALUE), priority));
+                if (isStorageMap != null) isStorageMap.put(handler, isStorage);
                 if (canInsert && !injectors.contains(handler)) injectors.add(handler);
                 if (canExtract && !extractors.contains(handler)) extractors.add(handler);
             });
@@ -210,13 +222,24 @@ public class NetworkController {
             List<T> injectors,
             BlockPos originPos,
             Map<Object, BlockPos> positions,
-            Map<Object, Integer> priorities
+            Map<Object, Integer> priorities,
+            @Nullable Map<Object, Boolean> isStorageMap
     ) {
         if (injectors.size() <= 1) return;
         injectors.sort((t1, t2) -> {
+            // 1. ストレージ（保管庫）最優先
+            boolean s1 = isStorageMap != null && isStorageMap.getOrDefault(t1, false);
+            boolean s2 = isStorageMap != null && isStorageMap.getOrDefault(t2, false);
+            if (s1 != s2) {
+                return s1 ? -1 : 1;
+            }
+
+            // 2. 優先度降順
             int p1 = priorities != null ? priorities.getOrDefault(t1, 0) : 0;
             int p2 = priorities != null ? priorities.getOrDefault(t2, 0) : 0;
-            if (p1 != p2) return Integer.compare(p2, p1); // 優先度降順
+            if (p1 != p2) return Integer.compare(p2, p1);
+
+            // 3. 起点からの距離昇順 (Nearest-First)
             if (originPos != null && positions != null) {
                 BlockPos pos1 = positions.get(t1);
                 BlockPos pos2 = positions.get(t2);
@@ -224,7 +247,7 @@ public class NetworkController {
                     double d1 = originPos.distSqr(pos1);
                     double d2 = originPos.distSqr(pos2);
                     int cmp = Double.compare(d1, d2);
-                    if (cmp != 0) return cmp; // 起点からの距離昇順 (Nearest-First)
+                    if (cmp != 0) return cmp;
                     return pos1.compareTo(pos2);
                 }
             }
@@ -267,6 +290,7 @@ public class NetworkController {
         Set<BlockPos> handledPositions = new HashSet<>();
         Map<Object, BlockPos> handlerPositions = new IdentityHashMap<>();
         Map<Object, Integer> handlerPriorities = new IdentityHashMap<>();
+        Map<Object, Boolean> handlerIsStorage = new IdentityHashMap<>();
 
         // 1. Process configured wireless nodes and connected nodes
         List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
@@ -340,9 +364,9 @@ public class NetworkController {
             boolean canExtract = node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH;
 
             int nodePriority = node.getPriority();
-            collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, canInsert, canExtract, itemInjectors, itemExtractors, handlerPositions, handlerPriorities);
-            collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, canInsert, canExtract, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities);
-            collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, canInsert, canExtract, energyInjectors, energyExtractors, handlerPositions, handlerPriorities);
+            collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, canInsert, canExtract, itemInjectors, itemExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
+            collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, canInsert, canExtract, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
+            collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, canInsert, canExtract, energyInjectors, energyExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
 
             EnergyTransferExecutor.collectMekanismCapabilities(
                     be, side,
@@ -386,17 +410,17 @@ public class NetworkController {
 
                 // Item transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ITEM) {
-                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, itemInjectors, itemExtractors, handlerPositions, handlerPriorities);
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, itemInjectors, itemExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
                 }
 
                 // Fluid transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.FLUID) {
-                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities);
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
                 }
 
                 // Energy transfer
                 if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ENERGY) {
-                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, energyInjectors, energyExtractors, handlerPositions, handlerPriorities);
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, energyInjectors, energyExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
                     EnergyTransferExecutor.collectMekanismCapabilities(
                             be, side,
                             true, true,
@@ -434,9 +458,9 @@ public class NetworkController {
 
                 Direction side = dir.getOpposite();
 
-                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, itemInjectors, itemExtractors, handlerPositions, handlerPriorities);
-                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities);
-                collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, energyInjectors, energyExtractors, handlerPositions, handlerPriorities);
+                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, itemInjectors, itemExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
+                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, fluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
+                collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, energyInjectors, energyExtractors, handlerPositions, handlerPriorities, handlerIsStorage);
 
                 EnergyTransferExecutor.collectMekanismCapabilities(
                         be, side,
@@ -474,16 +498,15 @@ public class NetworkController {
             GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, effectiveOverclocks);
         }
 
-        // 4. Sort injectors once per tick (Priority descending, then distance from origin ascending)
-        sortInjectors(itemInjectors, originPos, handlerPositions, handlerPriorities);
-        sortInjectors(fluidInjectors, originPos, handlerPositions, handlerPriorities);
-        sortInjectors(energyInjectors, originPos, handlerPositions, handlerPriorities);
+        // 4. Sort injectors once per tick: Storage first, then Priority descending, then distance from origin ascending
+        sortInjectors(itemInjectors, originPos, handlerPositions, handlerPriorities, handlerIsStorage);
+        sortInjectors(fluidInjectors, originPos, handlerPositions, handlerPriorities, handlerIsStorage);
+        sortInjectors(energyInjectors, originPos, handlerPositions, handlerPriorities, handlerIsStorage);
 
         // 5. Execute transfers between extractors and injectors
-        long currentTick = level.getGameTime();
-        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, itemInjectors, effectiveOverclocks, currentTick, itemRejectionCache);
-        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, fluidInjectors, effectiveOverclocks, currentTick, fluidRejectionCache);
-        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, energyInjectors, effectiveOverclocks, currentTick, energyRejectionCache);
+        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, itemInjectors, effectiveOverclocks);
+        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, fluidInjectors, effectiveOverclocks);
+        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, energyInjectors, effectiveOverclocks);
         EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);
         GasTransferExecutor.executeAllTransfers(
                 gasInjectors, gasExtractors,

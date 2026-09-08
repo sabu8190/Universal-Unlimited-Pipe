@@ -18,6 +18,7 @@ public class EnergyTransferExecutor {
         executeAllEnergyTransfers(extractors, injectors, overclocks, 0L, null);
     }
 
+
     public static void executeAllEnergyTransfers(
             List<IEnergyStorage> extractors,
             List<IEnergyStorage> injectors,
@@ -41,9 +42,7 @@ public class EnergyTransferExecutor {
                     overclocks,
                     "UUP_Energy_Extract",
                     "UUP_Energy_Insert",
-                    receivedInThisTick,
-                    currentTick,
-                    persistentEnergyCache
+                    receivedInThisTick
             );
         }
     }
@@ -55,18 +54,7 @@ public class EnergyTransferExecutor {
             String sourceLabel,
             String targetLabel
     ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, 0L, null);
-    }
-
-    public static long executeTransfer(
-            IEnergyStorage sourceHandler,
-            List<IEnergyStorage> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Set<IEnergyStorage> receivedHandlers
-    ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, receivedHandlers, 0L, null);
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null);
     }
 
     public static long executeTransfer(
@@ -78,6 +66,17 @@ public class EnergyTransferExecutor {
             @Nullable Set<IEnergyStorage> receivedHandlers,
             long currentTick,
             @Nullable java.util.Map<IEnergyStorage, Long> persistentCache
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, receivedHandlers);
+    }
+
+    public static long executeTransfer(
+            IEnergyStorage sourceHandler,
+            List<IEnergyStorage> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Set<IEnergyStorage> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -98,19 +97,9 @@ public class EnergyTransferExecutor {
             if (target == sourceHandler) continue;
             if (transferredTotal >= maxToMove) break;
 
-            if (persistentCache != null) {
-                Long expireTick = persistentCache.get(target);
-                if (expireTick != null && currentTick < expireTick) {
-                    continue; // 満杯TTL内なら即スキップ
-                }
-            }
-
             // 1. Check target's immediate intake demand (Simulation)
             int canAccept = target.receiveEnergy(Integer.MAX_VALUE, true);
             if (canAccept <= 0) {
-                if (persistentCache != null) {
-                    persistentCache.put(target, currentTick + 10L);
-                }
                 continue;
             }
 
@@ -129,10 +118,6 @@ public class EnergyTransferExecutor {
             if (received > 0) {
                 if (receivedHandlers != null) {
                     receivedHandlers.add(target);
-                }
-                if (persistentCache != null) {
-                    persistentCache.remove(target);
-                    persistentCache.remove(sourceHandler);
                 }
             }
 

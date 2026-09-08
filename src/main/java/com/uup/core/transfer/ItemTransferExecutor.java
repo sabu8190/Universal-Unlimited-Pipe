@@ -56,9 +56,7 @@ public class ItemTransferExecutor {
                     "UUP_Extract",
                     "UUP_Insert",
                     sharedRejectedMap,
-                    receivedInThisTick,
-                    currentTick,
-                    persistentRejectionCache
+                    receivedInThisTick
             );
         }
     }
@@ -73,17 +71,7 @@ public class ItemTransferExecutor {
         return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null, 0L, null);
     }
 
-    public static long executeTransfer(
-            IItemHandler sourceHandler,
-            List<IItemHandler> targetHandlers,
-            int overclocks,
-            String sourceLabel,
-            String targetLabel,
-            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
-            @Nullable Set<IItemHandler> receivedHandlers
-    ) {
-        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null);
-    }
+
 
     private static class TargetState {
         final Map<ItemKey, Integer> lastSlotByItem = new HashMap<>();
@@ -91,14 +79,6 @@ public class ItemTransferExecutor {
     }
 
     private static final Map<IItemHandler, TargetState> TARGET_STATE_CACHE = 
-            Collections.synchronizedMap(new WeakHashMap<>());
-
-    // アイテムごとの優先ターゲット記憶 (Preferred Target Routing: 200ターゲットの総当たり走査を O(1) 直行化)
-    private static final Map<ItemKey, IItemHandler> PREFERRED_TARGET_BY_ITEM = 
-            Collections.synchronizedMap(new WeakHashMap<>());
-
-    // 空インベントリスキップキャッシュ (Empty Source Cache: TTL 5 Tick = 0.25秒で無駄な全スロット走査を完全スキップ)
-    private static final Map<IItemHandler, Long> EMPTY_SOURCE_CACHE = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
     /**
@@ -236,17 +216,20 @@ public class ItemTransferExecutor {
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache
     ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers
+    ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
-        }
-
-        // [Optimization A: Empty Source Cache Check]
-        // 直前チェックで完全に空だったインベントリは 5 Tick (0.25秒) スキップして無駄な getStackInSlot を排除
-        if (currentTick > 0) {
-            Long emptyUntil = EMPTY_SOURCE_CACHE.get(sourceHandler);
-            if (emptyUntil != null && currentTick < emptyUntil) {
-                return 0;
-            }
         }
 
         int baseRate = ModConfig.COMMON != null && ModConfig.COMMON.baseItemTransferRate != null 
@@ -271,52 +254,16 @@ public class ItemTransferExecutor {
         }
         if (validTargets.isEmpty()) return 0;
 
-        boolean hasAnyItem = false;
-
         for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
-            hasAnyItem = true;
 
             ItemKey itemKey = ItemKey.of(inSlot);
 
-            // [Optimization B: Preferred Target Routing]
-            // このアイテム種別を直前に受け入れ成功したターゲットを優先して先頭に配置
-            IItemHandler preferredTarget = PREFERRED_TARGET_BY_ITEM.get(itemKey);
-            if (preferredTarget != null && (preferredTarget == sourceHandler || !validTargets.contains(preferredTarget))) {
-                PREFERRED_TARGET_BY_ITEM.remove(itemKey);
-                preferredTarget = null;
-            }
-
-            // 探索ターゲットリストの構築: preferredTarget があれば最優先で試行
-            List<IItemHandler> targetsToTry;
-            if (preferredTarget != null) {
-                targetsToTry = new ArrayList<>(validTargets.size());
-                targetsToTry.add(preferredTarget);
-                for (IItemHandler t : validTargets) {
-                    if (t != preferredTarget) {
-                        targetsToTry.add(t);
-                    }
-                }
-            } else {
-                targetsToTry = validTargets;
-            }
-
-            for (IItemHandler target : targetsToTry) {
+            for (IItemHandler target : validTargets) {
                 if (movedTotal >= maxToMove) break;
 
-                // [Optimization 1] 永続的TTLキャッシュチェック (TTL 10 Tick = 0.5秒)
-                if (persistentCache != null) {
-                    Map<ItemKey, Long> targetCache = persistentCache.get(target);
-                    if (targetCache != null) {
-                        Long expireTick = targetCache.get(itemKey);
-                        if (expireTick != null && currentTick < expireTick) {
-                            continue; // TTL内ならシミュレーション・抽出一切なしで即スキップ！
-                        }
-                    }
-                }
-
-                // [Optimization 2] 同一Tick内共有キャッシュチェック
+                // 同一Tick内共有キャッシュチェック (満杯と判明したターゲットは即スキップ)
                 Set<ItemKey> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(itemKey)) {
                     continue;
@@ -328,8 +275,7 @@ public class ItemTransferExecutor {
                 int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
                 if (currentLimit <= 0) break;
 
-                // [Optimization 3: 事前シミュレーション確認による無駄抽出＆ロールバックの完全根絶]
-                // ターゲットが確実に受け入れ可能な数量 (accepted) をシミュレーションで確認
+                // [Optimization: 事前シミュレーション確認による無駄抽出＆ロールバックの完全根絶]
                 ItemStack probeStack = currentInSlot.copy();
                 probeStack.setCount(currentLimit);
 
@@ -338,14 +284,8 @@ public class ItemTransferExecutor {
                 int accepted = currentLimit - simRemainder.getCount();
 
                 if (accepted <= 0) {
-                    // 全く受け入れられない場合: ターゲットを拒絶キャッシュに登録
+                    // 全く受け入れられない場合: 同一Tick内の拒絶キャッシュに登録
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
-                    if (persistentCache != null) {
-                        persistentCache.computeIfAbsent(target, k -> new HashMap<>()).put(itemKey, currentTick + 10L);
-                    }
-                    if (target == preferredTarget) {
-                        PREFERRED_TARGET_BY_ITEM.remove(itemKey);
-                    }
                     continue;
                 }
 
@@ -359,37 +299,25 @@ public class ItemTransferExecutor {
 
                 if (actuallyMoved > 0) {
                     movedTotal += actuallyMoved;
-                    PREFERRED_TARGET_BY_ITEM.put(itemKey, target); // 優先ルーティングを記憶！
                     if (receivedHandlers != null) {
                         receivedHandlers.add(target);
                     }
-                    if (persistentCache != null) {
-                        persistentCache.remove(sourceHandler);
-                    }
                     TARGET_STATE_CACHE.remove(sourceHandler);
-                    EMPTY_SOURCE_CACHE.remove(target); // ターゲットにアイテムが入ったため空キャッシュ解除
                 }
 
-                // 万が一の極小余りのみロールバック (事前確認済みのため通常は発生しない)
+                // 万が一の極小余りのみロールバック
                 if (!realRemainder.isEmpty()) {
                     sourceHandler.insertItem(slot, realRemainder, false);
                 }
 
-                // アイテムが入らなかった場合は次のターゲットを試す
                 if (actuallyMoved == 0) {
                     continue;
                 }
 
-                // スロットが空になった場合は次のスロットへ
                 if (sourceHandler.getStackInSlot(slot).isEmpty()) {
                     break;
                 }
             }
-        }
-
-        // ソースインベントリが完全に空だった場合、次回の走査を 5 Tick (0.25秒) スキップ
-        if (!hasAnyItem && currentTick > 0) {
-            EMPTY_SOURCE_CACHE.put(sourceHandler, currentTick + 5L);
         }
 
         if (movedTotal > 0) {
