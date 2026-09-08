@@ -75,21 +75,20 @@ public class UniversalUnlimitedPipeTest {
     }
 
     @Test
-    public void testStoragePartitioningConcept() {
+    public void testSideConfigDelegationConcept() {
         // Simulating 101 smelting factories and 5 chests
-        boolean extractorIsMachine = true;
+        // According to user requirement: Machine input/output is delegated to machine side config / capabilities.
         java.util.List<String> storageInjectors = new java.util.ArrayList<>(java.util.List.of("ChestA", "ChestB", "ChestC"));
         java.util.List<String> machineInjectors = new java.util.ArrayList<>();
         for (int i = 1; i <= 100; i++) {
             machineInjectors.add("SmeltingFactory_" + i);
         }
 
-        java.util.List<String> validTargets = extractorIsMachine ? storageInjectors : new java.util.ArrayList<>() {{
-            addAll(storageInjectors);
-            addAll(machineInjectors);
-        }};
+        java.util.List<String> allInjectors = new java.util.ArrayList<>();
+        allInjectors.addAll(storageInjectors);
+        allInjectors.addAll(machineInjectors);
 
-        Assertions.assertEquals(3, validTargets.size(), "Machine extractor should ONLY target storageInjectors, completely isolating other machines");
-        Assertions.assertFalse(validTargets.contains("SmeltingFactory_1"), "Smelting factory must not be in the target list of another machine");
+        Assertions.assertEquals(103, allInjectors.size(), "All injectors (storage + machines) are available, letting machine side config govern acceptance");
+        Assertions.assertEquals("ChestA", allInjectors.get(0), "Nearest storage target is evaluated first");
     }
 }

@@ -87,18 +87,11 @@ public class ItemTransferExecutor {
                 continue;
             }
 
-            boolean isStorage = storageHandlers != null && storageHandlers.contains(extractor);
-
-            // [Core Optimization: Machine Loop Isolation]
-            // If the extractor is a processing machine, target ONLY storage containers (storageInjectors).
-            // This guarantees 0 simulation attempts against other processing machines!
-            // If the extractor is storage, allow delivering to all targets (both machines and other storages).
-            List<IItemHandler> targets = isStorage ? allInjectors : storageInjectors;
-            if (targets == null || targets.isEmpty()) continue;
-
+            // Respect machine side configs: allow transferring to all configured injectors
+            // Machine side configurations and Forge capabilities naturally govern input acceptance.
             executeTransfer(
                     extractor,
-                    targets,
+                    allInjectors,
                     overclocks,
                     "UUP_Extract",
                     "UUP_Insert",
@@ -132,10 +125,15 @@ public class ItemTransferExecutor {
 
     private static class TargetState {
         final Map<ItemKey, Integer> lastSlotByItem = new HashMap<>();
+        final Set<ItemKey> fullItems = new HashSet<>();
         int firstEmptySlot = 0;
     }
 
     private static final Map<IItemHandler, TargetState> TARGET_STATE_CACHE = 
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    // Active nearest target cache: routes items directly to the active filling container in O(1)
+    private static final Map<ItemKey, IItemHandler> ACTIVE_TARGET_BY_ITEM = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
     /**
@@ -176,11 +174,15 @@ public class ItemTransferExecutor {
             boolean simulate
     ) {
         if (target == null || stack.isEmpty()) return stack;
+        if (state != null && state.fullItems.contains(itemKey)) {
+            return stack; // Immediate O(1) skip for known full targets
+        }
         int slots = target.getSlots();
         if (slots <= 0) return stack;
 
+        int initialCount = stack.getCount();
+
         // [Fast Path 1: アイテム別 Last-Hit Direct Insert ($O(1)$)]
-        // 複数アイテムが混在していても、アイテムごとに直前スロットを記憶しているため確実にヒット！
         if (state != null) {
             Integer lastSlotObj = state.lastSlotByItem.get(itemKey);
             if (lastSlotObj != null) {
@@ -188,14 +190,18 @@ public class ItemTransferExecutor {
                 if (lastSlot >= 0 && lastSlot < slots) {
                     ItemStack inLastSlot = target.getStackInSlot(lastSlot);
                     if (!inLastSlot.isEmpty() && canItemsStackFast(stack, inLastSlot)) {
-                        int countBefore = stack.getCount();
-                        stack = target.insertItem(lastSlot, stack, simulate);
-                        if (stack.getCount() < countBefore) {
-                            if (stack.isEmpty()) {
-                                return ItemStack.EMPTY;
+                        if (inLastSlot.getCount() < inLastSlot.getMaxStackSize() && inLastSlot.getCount() < target.getSlotLimit(lastSlot)) {
+                            int countBefore = stack.getCount();
+                            stack = target.insertItem(lastSlot, stack, simulate);
+                            if (stack.getCount() < countBefore) {
+                                if (state != null) state.fullItems.remove(itemKey);
+                                if (stack.isEmpty()) {
+                                    return ItemStack.EMPTY;
+                                }
+                            } else if (!simulate) {
+                                state.lastSlotByItem.remove(itemKey);
                             }
                         } else if (!simulate) {
-                            // そのスロットが満杯になったためキャッシュから除外
                             state.lastSlotByItem.remove(itemKey);
                         }
                     } else if (!simulate) {
@@ -219,11 +225,16 @@ public class ItemTransferExecutor {
                     foundEmptySlot = i;
                 }
             } else if (canItemsStackFast(stack, inSlot)) {
+                // Skip full slots immediately without invoking heavy insertItem simulation
+                if (inSlot.getCount() >= inSlot.getMaxStackSize() || inSlot.getCount() >= target.getSlotLimit(i)) {
+                    continue;
+                }
                 int countBefore = stack.getCount();
                 stack = target.insertItem(i, stack, simulate);
                 if (stack.getCount() < countBefore) {
-                    if (state != null && !simulate) {
-                        state.lastSlotByItem.put(itemKey, i);
+                    if (state != null) {
+                        if (!simulate) state.lastSlotByItem.put(itemKey, i);
+                        state.fullItems.remove(itemKey);
                     }
                     if (stack.isEmpty()) {
                         return ItemStack.EMPTY;
@@ -238,7 +249,6 @@ public class ItemTransferExecutor {
         }
 
         // [Fast Path 3: 空きスロットへの挿入]
-        // 走査開始位置を記録された空きスロットから開始することで、先頭の埋まっているスロットを完全スキップ
         int startSearchEmpty = (foundEmptySlot != -1) ? foundEmptySlot : firstEmpty;
         if (!stack.isEmpty() && startSearchEmpty < slots) {
             for (int i = startSearchEmpty; i < slots; i++) {
@@ -247,9 +257,12 @@ public class ItemTransferExecutor {
                     int countBefore = stack.getCount();
                     stack = target.insertItem(i, stack, simulate);
                     if (stack.getCount() < countBefore) {
-                        if (state != null && !simulate) {
-                            state.lastSlotByItem.put(itemKey, i);
-                            state.firstEmptySlot = i + 1; // このスロットが埋まったため次へ進める
+                        if (state != null) {
+                            if (!simulate) {
+                                state.lastSlotByItem.put(itemKey, i);
+                                state.firstEmptySlot = i + 1;
+                            }
+                            state.fullItems.remove(itemKey);
                         }
                         if (stack.isEmpty()) {
                             return ItemStack.EMPTY;
@@ -257,6 +270,11 @@ public class ItemTransferExecutor {
                     }
                 }
             }
+        }
+
+        // Target accepted nothing and has no room for this item
+        if (stack.getCount() == initialCount && state != null && !simulate) {
+            state.fullItems.add(itemKey);
         }
 
         return stack;
@@ -305,10 +323,32 @@ public class ItemTransferExecutor {
 
             ItemKey itemKey = ItemKey.of(inSlot);
 
-            // [Strict Nearest-First Routing]
-            // Always try targets in exact pre-sorted order (closest chest first).
-            // Do not alter order by previous hits, ensuring closest containers are filled to 100% first.
-            for (IItemHandler target : validTargets) {
+            // [Active Nearest-First Direct Routing]
+            // 1. Always try the nearest target (validTargets.get(0)) first to preserve closest-fill priority.
+            // 2. If the nearest is full, try activeTarget second, completely skipping dozens of full chests in O(1).
+            // 3. Fall back to sequential pre-sorted order for new targets.
+            IItemHandler nearestTarget = validTargets.get(0);
+            IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
+            if (activeTarget != null && (activeTarget == sourceHandler || !validTargets.contains(activeTarget))) {
+                ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                activeTarget = null;
+            }
+
+            List<IItemHandler> targetsToTry;
+            if (activeTarget != null && activeTarget != nearestTarget) {
+                targetsToTry = new ArrayList<>(validTargets.size());
+                targetsToTry.add(nearestTarget);
+                targetsToTry.add(activeTarget);
+                for (IItemHandler t : validTargets) {
+                    if (t != nearestTarget && t != activeTarget) {
+                        targetsToTry.add(t);
+                    }
+                }
+            } else {
+                targetsToTry = validTargets;
+            }
+
+            for (IItemHandler target : targetsToTry) {
                 if (movedTotal >= maxToMove) break;
 
                 // Intra-tick rejection check: skip targets already proven full for this item in THIS tick
@@ -334,6 +374,9 @@ public class ItemTransferExecutor {
                 if (accepted <= 0) {
                     // Mark as rejected only within the current tick to prevent target hopping across ticks
                     rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+                    if (target == activeTarget) {
+                        ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                    }
                     continue;
                 }
 
@@ -347,8 +390,14 @@ public class ItemTransferExecutor {
 
                 if (actuallyMoved > 0) {
                     movedTotal += actuallyMoved;
+                    ACTIVE_TARGET_BY_ITEM.put(itemKey, target); // Directly route subsequent items here in O(1)
                     if (receivedHandlers != null) {
                         receivedHandlers.add(target);
+                    }
+                    targetState.fullItems.remove(itemKey);
+                    TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
+                    if (srcState != null) {
+                        srcState.fullItems.remove(itemKey);
                     }
                     TARGET_STATE_CACHE.remove(sourceHandler);
                 }
