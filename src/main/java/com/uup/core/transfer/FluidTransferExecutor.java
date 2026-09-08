@@ -3,12 +3,42 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
+import net.minecraft.world.level.material.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.capability.IFluidHandler;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
+import java.util.*;
 
 public class FluidTransferExecutor {
+
+    public static void executeAllFluidTransfers(
+            List<IFluidHandler> extractors,
+            List<IFluidHandler> injectors,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+            return;
+        }
+
+        Map<IFluidHandler, Set<Fluid>> sharedRejectedMap = new IdentityHashMap<>();
+        Set<IFluidHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (IFluidHandler extractor : extractors) {
+            if (extractor == null) continue;
+            if (receivedInThisTick.contains(extractor)) continue;
+
+            executeTransfer(
+                    extractor,
+                    injectors,
+                    overclocks,
+                    "UUP_Fluid_Extract",
+                    "UUP_Fluid_Insert",
+                    sharedRejectedMap,
+                    receivedInThisTick
+            );
+        }
+    }
 
     public static long executeTransfer(
             IFluidHandler sourceHandler,
@@ -16,6 +46,18 @@ public class FluidTransferExecutor {
             int overclocks,
             String sourceLabel,
             String targetLabel
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null);
+    }
+
+    public static long executeTransfer(
+            IFluidHandler sourceHandler,
+            List<IFluidHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IFluidHandler, Set<Fluid>> sharedRejectedMap,
+            @Nullable Set<IFluidHandler> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -32,14 +74,30 @@ public class FluidTransferExecutor {
         long filledTotal = 0;
         int tanks = sourceHandler.getTanks();
 
+        Map<IFluidHandler, Set<Fluid>> rejectedMap = sharedRejectedMap != null 
+                ? sharedRejectedMap : new IdentityHashMap<>();
+
+        List<IFluidHandler> validTargets = new ArrayList<>(targetHandlers.size());
+        for (IFluidHandler target : targetHandlers) {
+            if (target != null && target != sourceHandler) {
+                validTargets.add(target);
+            }
+        }
+        if (validTargets.isEmpty()) return 0;
+
         if (tanks > 0) {
             for (int tank = 0; tank < tanks && filledTotal < maxToMove; tank++) {
                 FluidStack inTank = sourceHandler.getFluidInTank(tank);
                 if (inTank.isEmpty()) continue;
+                Fluid fluid = inTank.getFluid();
 
-                for (IFluidHandler target : targetHandlers) {
-                    if (target == sourceHandler) continue;
+                for (IFluidHandler target : validTargets) {
                     if (filledTotal >= maxToMove) break;
+
+                    Set<Fluid> rejected = rejectedMap.get(target);
+                    if (rejected != null && rejected.contains(fluid)) {
+                        continue;
+                    }
 
                     int queryLimit = (int) Math.min((long) inTank.getAmount(), maxToMove - filledTotal);
                     if (queryLimit <= 0) break;
@@ -48,7 +106,10 @@ public class FluidTransferExecutor {
                     FluidStack sample = inTank.copy();
                     sample.setAmount(queryLimit);
                     int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
-                    if (canAccept <= 0) continue;
+                    if (canAccept <= 0) {
+                        rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
+                        continue;
+                    }
 
                     // 2. Extract from source
                     FluidStack toDrain = inTank.copy();
@@ -63,6 +124,10 @@ public class FluidTransferExecutor {
                     int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
                     filledTotal += accepted;
 
+                    if (accepted > 0 && receivedHandlers != null) {
+                        receivedHandlers.add(target);
+                    }
+
                     // Rollback remainder if any
                     int unaccepted = actuallyExtracted.getAmount() - accepted;
                     if (unaccepted > 0) {
@@ -73,22 +138,34 @@ public class FluidTransferExecutor {
             }
         } else {
             // Fallback for fluid handlers where getTanks() returns 0
-            for (IFluidHandler target : targetHandlers) {
-                if (target == sourceHandler) continue;
+            for (IFluidHandler target : validTargets) {
                 if (filledTotal >= maxToMove) break;
 
                 int queryLimit = (int) Math.min((long) Integer.MAX_VALUE, maxToMove - filledTotal);
                 FluidStack sample = sourceHandler.drain(queryLimit, IFluidHandler.FluidAction.SIMULATE);
                 if (sample.isEmpty()) break;
+                Fluid fluid = sample.getFluid();
+
+                Set<Fluid> rejected = rejectedMap.get(target);
+                if (rejected != null && rejected.contains(fluid)) {
+                    continue;
+                }
 
                 int canAccept = target.fill(sample, IFluidHandler.FluidAction.SIMULATE);
-                if (canAccept <= 0) continue;
+                if (canAccept <= 0) {
+                    rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(fluid);
+                    continue;
+                }
 
                 FluidStack actuallyExtracted = sourceHandler.drain(canAccept, IFluidHandler.FluidAction.EXECUTE);
                 if (actuallyExtracted.isEmpty()) break;
 
                 int accepted = target.fill(actuallyExtracted, IFluidHandler.FluidAction.EXECUTE);
                 filledTotal += accepted;
+
+                if (accepted > 0 && receivedHandlers != null) {
+                    receivedHandlers.add(target);
+                }
 
                 int unaccepted = actuallyExtracted.getAmount() - accepted;
                 if (unaccepted > 0) {

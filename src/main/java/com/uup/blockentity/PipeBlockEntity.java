@@ -63,8 +63,12 @@ public class PipeBlockEntity extends BlockEntity {
         standaloneNetwork.markNetworkDirty();
     }
 
+    public void syncStandaloneMaster(BlockPos lowestPos, java.util.Set<BlockPos> controllers) {
+        standaloneNetwork.syncNetworkState(lowestPos, controllers);
+    }
+
     public void serverTick(ServerLevel level) {
-        if (standaloneNetwork.isMasterPipe(worldPosition) || !standaloneNetwork.hasController()) {
+        if (standaloneNetwork.shouldTickStandalone(worldPosition)) {
             standaloneNetwork.tick(level, worldPosition);
         }
     }

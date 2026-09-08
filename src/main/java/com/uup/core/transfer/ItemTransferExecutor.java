@@ -3,13 +3,53 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.IItemHandler;
 import net.minecraftforge.items.ItemHandlerHelper;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
+import java.util.*;
 
 public class ItemTransferExecutor {
+
+    public record ItemKey(Item item, @Nullable CompoundTag tag) {
+        public static ItemKey of(ItemStack stack) {
+            return new ItemKey(stack.getItem(), stack.hasTag() ? stack.getTag() : null);
+        }
+    }
+
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> injectors,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+            return;
+        }
+
+        Map<IItemHandler, Set<ItemKey>> sharedRejectedMap = new IdentityHashMap<>();
+        Set<IItemHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (IItemHandler extractor : extractors) {
+            if (extractor == null) continue;
+            // ピンポン防止: 同一Tick内で既にアイテムを受け取ったインベントリからは搬出しない
+            if (receivedInThisTick.contains(extractor)) {
+                continue;
+            }
+
+            executeTransfer(
+                    extractor,
+                    injectors,
+                    overclocks,
+                    "UUP_Extract",
+                    "UUP_Insert",
+                    sharedRejectedMap,
+                    receivedInThisTick
+            );
+        }
+    }
 
     public static long executeTransfer(
             IItemHandler sourceHandler,
@@ -17,6 +57,18 @@ public class ItemTransferExecutor {
             int overclocks,
             String sourceLabel,
             String targetLabel
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -33,17 +85,31 @@ public class ItemTransferExecutor {
         long movedTotal = 0;
         int slots = sourceHandler.getSlots();
 
-        // [Opt 1] Fast-Path Cache for same-item consecutive slots
-        ItemStack cachedItemType = ItemStack.EMPTY;
-        IItemHandler cachedTarget = null;
+        Map<IItemHandler, Set<ItemKey>> rejectedMap = sharedRejectedMap != null 
+                ? sharedRejectedMap : new IdentityHashMap<>();
+
+        List<IItemHandler> validTargets = new ArrayList<>(targetHandlers.size());
+        for (IItemHandler target : targetHandlers) {
+            if (target != null && target != sourceHandler) {
+                validTargets.add(target);
+            }
+        }
+        if (validTargets.isEmpty()) return 0;
 
         for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
 
-            for (IItemHandler target : targetHandlers) {
-                if (target == sourceHandler) continue;
+            ItemKey itemKey = ItemKey.of(inSlot);
+
+            for (IItemHandler target : validTargets) {
                 if (movedTotal >= maxToMove) break;
+
+                // [Optimization 1] O(1) キャッシュチェック: ターゲットがこのアイテムを拒否済みなら即スキップ
+                Set<ItemKey> rejected = rejectedMap.get(target);
+                if (rejected != null && rejected.contains(itemKey)) {
+                    continue;
+                }
 
                 ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
                 if (currentInSlot.isEmpty()) break;
@@ -51,23 +117,31 @@ public class ItemTransferExecutor {
                 int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
                 if (currentLimit <= 0) break;
 
-                // 1. Simulate extraction from source
+                // 1. ソースからの抽出シミュレーション
                 ItemStack simulatedExtract = sourceHandler.extractItem(slot, currentLimit, true);
                 if (simulatedExtract.isEmpty()) break;
 
-                // 2. Simulate insertion into target
+                // 2. ターゲットへの挿入シミュレーション
                 ItemStack remainder = ItemHandlerHelper.insertItemStacked(target, simulatedExtract, true);
                 int accepted = simulatedExtract.getCount() - remainder.getCount();
-                if (accepted <= 0) continue;
+                if (accepted <= 0) {
+                    // [Optimization 2] 受け入れ拒否されたアイテムをキャッシュに登録し、次回以降 O(1) で即スキップ
+                    rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+                    continue;
+                }
 
-                // 3. Execute extract and insert
+                // 3. 実際の抽出と挿入を実行
                 ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
                 if (!actuallyExtracted.isEmpty()) {
                     ItemStack insertedRemainder = ItemHandlerHelper.insertItemStacked(target, actuallyExtracted, false);
                     int actuallyMoved = actuallyExtracted.getCount() - insertedRemainder.getCount();
                     movedTotal += actuallyMoved;
 
-                    // Rollback remainder if any
+                    if (actuallyMoved > 0 && receivedHandlers != null) {
+                        receivedHandlers.add(target);
+                    }
+
+                    // 挿入しきれなかった余りをソースにロールバック
                     if (!insertedRemainder.isEmpty()) {
                         ItemHandlerHelper.insertItemStacked(sourceHandler, insertedRemainder, false);
                     }

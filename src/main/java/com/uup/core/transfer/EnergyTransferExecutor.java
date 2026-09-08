@@ -4,10 +4,40 @@ import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
 import net.minecraftforge.energy.IEnergyStorage;
+import org.jetbrains.annotations.Nullable;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 public class EnergyTransferExecutor {
+
+    public static void executeAllEnergyTransfers(
+            List<IEnergyStorage> extractors,
+            List<IEnergyStorage> injectors,
+            int overclocks
+    ) {
+        if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
+            return;
+        }
+
+        Set<IEnergyStorage> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (IEnergyStorage extractor : extractors) {
+            if (extractor == null) continue;
+            if (receivedInThisTick.contains(extractor)) continue;
+
+            executeTransfer(
+                    extractor,
+                    injectors,
+                    overclocks,
+                    "UUP_Energy_Extract",
+                    "UUP_Energy_Insert",
+                    receivedInThisTick
+            );
+        }
+    }
 
     public static long executeTransfer(
             IEnergyStorage sourceHandler,
@@ -15,6 +45,17 @@ public class EnergyTransferExecutor {
             int overclocks,
             String sourceLabel,
             String targetLabel
+    ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, null);
+    }
+
+    public static long executeTransfer(
+            IEnergyStorage sourceHandler,
+            List<IEnergyStorage> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Set<IEnergyStorage> receivedHandlers
     ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
@@ -50,6 +91,10 @@ public class EnergyTransferExecutor {
             // 4. Inject directly into target
             int received = target.receiveEnergy(extracted, false);
             transferredTotal += received;
+
+            if (received > 0 && receivedHandlers != null) {
+                receivedHandlers.add(target);
+            }
 
             // Rollback if any unexpected remainder (fail-safe)
             int unaccepted = extracted - received;

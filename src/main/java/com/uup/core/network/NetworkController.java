@@ -74,6 +74,23 @@ public class NetworkController {
         return foundControllers.isEmpty() && myPos != null && myPos.equals(lowestPipePos);
     }
 
+    public boolean shouldTickStandalone(BlockPos myPos) {
+        if (!foundControllers.isEmpty()) {
+            return false;
+        }
+        if (lowestPipePos == null || networkDirty) {
+            return true;
+        }
+        return myPos != null && myPos.equals(lowestPipePos);
+    }
+
+    public void syncNetworkState(BlockPos lowestPos, Set<BlockPos> controllers) {
+        this.lowestPipePos = lowestPos;
+        this.foundControllers.clear();
+        this.foundControllers.addAll(controllers);
+        this.networkDirty = false;
+    }
+
     public void addNode(TransferNode node) {
         if (!configuredNodes.contains(node)) {
             configuredNodes.add(node);
@@ -137,6 +154,16 @@ public class NetworkController {
         }
         networkDirty = false;
         UUPLogger.debug(String.format("Rebuilt UUP network: %d pipes, %d nodes, %d controllers.", cachedPipes.size(), scannedNodePositions.size(), foundControllers.size()));
+
+        // 同一配管網内の他のすべてのPipeBlockEntityにマスター情報を即時同期し、初回重複スキャンを完全防止
+        for (BlockPos pPos : cachedPipes) {
+            if (!pPos.equals(startPos) && level.isLoaded(pPos)) {
+                BlockEntity be = level.getBlockEntity(pPos);
+                if (be instanceof PipeBlockEntity otherPipe) {
+                    otherPipe.syncStandaloneMaster(lowestPipePos, foundControllers);
+                }
+            }
+        }
     }
 
     private static <T> void collectForgeCap(
@@ -403,15 +430,9 @@ public class NetworkController {
         }
 
         // 4. Execute transfers between extractors and injectors
-        for (IItemHandler extractor : itemExtractors) {
-            ItemTransferExecutor.executeTransfer(extractor, itemInjectors, effectiveOverclocks, "UUP_Extract", "UUP_Insert");
-        }
-        for (IFluidHandler extractor : fluidExtractors) {
-            FluidTransferExecutor.executeTransfer(extractor, fluidInjectors, effectiveOverclocks, "UUP_Fluid_Extract", "UUP_Fluid_Insert");
-        }
-        for (IEnergyStorage extractor : energyExtractors) {
-            EnergyTransferExecutor.executeTransfer(extractor, energyInjectors, effectiveOverclocks, "UUP_Energy_Extract", "UUP_Energy_Insert");
-        }
+        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, itemInjectors, effectiveOverclocks);
+        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, fluidInjectors, effectiveOverclocks);
+        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, energyInjectors, effectiveOverclocks);
         EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);
         GasTransferExecutor.executeAllTransfers(
                 gasInjectors, gasExtractors,
