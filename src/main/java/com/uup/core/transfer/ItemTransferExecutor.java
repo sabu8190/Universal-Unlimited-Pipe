@@ -213,9 +213,7 @@ public class ItemTransferExecutor {
             }
         }
 
-        // [Fast Path 2: 既存同種スタックへの追加探索]
-        int firstEmpty = (state != null && state.firstEmptySlot >= 0 && state.firstEmptySlot < slots) 
-                ? state.firstEmptySlot : 0;
+        // [Fast Path 2: 既存同種スタックへの追加探索 & 空きスロット検出]
         int foundEmptySlot = -1;
 
         for (int i = 0; i < slots; i++) {
@@ -248,10 +246,9 @@ public class ItemTransferExecutor {
             state.firstEmptySlot = foundEmptySlot;
         }
 
-        // [Fast Path 3: 空きスロットへの挿入]
-        int startSearchEmpty = (foundEmptySlot != -1) ? foundEmptySlot : firstEmpty;
-        if (!stack.isEmpty() && startSearchEmpty < slots) {
-            for (int i = startSearchEmpty; i < slots; i++) {
+        // [Fast Path 3: 空きスロットへの挿入 (空きスロットが検出された場合のみ走査)]
+        if (!stack.isEmpty() && foundEmptySlot != -1) {
+            for (int i = foundEmptySlot; i < slots; i++) {
                 ItemStack inSlot = target.getStackInSlot(i);
                 if (inSlot.isEmpty()) {
                     int countBefore = stack.getCount();
@@ -272,8 +269,8 @@ public class ItemTransferExecutor {
             }
         }
 
-        // Target accepted nothing and has no room for this item
-        if (stack.getCount() == initialCount && state != null && !simulate) {
+        // 挿入できず、これ以上入らない場合はシミュレーション時でも fullItems に即時記録 (O(1)スキップを有効化)
+        if (stack.getCount() == initialCount && state != null) {
             state.fullItems.add(itemKey);
         }
 
@@ -368,6 +365,12 @@ public class ItemTransferExecutor {
                 probeStack.setCount(currentLimit);
 
                 TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
+
+                // 最寄りターゲットは常に空き復帰を即座に検知できるよう、fullItems を一時クリアしてプローブ
+                if (target == nearestTarget) {
+                    targetState.fullItems.remove(itemKey);
+                }
+
                 ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true);
                 int accepted = currentLimit - simRemainder.getCount();
 
@@ -384,6 +387,12 @@ public class ItemTransferExecutor {
                 ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
                 if (actuallyExtracted.isEmpty()) break;
 
+                // 抽出元に空きができたため、抽出元の fullItems を即座にクリア
+                TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
+                if (srcState != null) {
+                    srcState.fullItems.clear();
+                }
+
                 // Insert into target
                 ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
                 int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
@@ -395,11 +404,6 @@ public class ItemTransferExecutor {
                         receivedHandlers.add(target);
                     }
                     targetState.fullItems.remove(itemKey);
-                    TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
-                    if (srcState != null) {
-                        srcState.fullItems.remove(itemKey);
-                    }
-                    TARGET_STATE_CACHE.remove(sourceHandler);
                 }
 
                 // Minimal rollback in rare edge cases

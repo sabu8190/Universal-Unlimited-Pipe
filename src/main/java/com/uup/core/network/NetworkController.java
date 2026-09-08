@@ -399,58 +399,6 @@ public class NetworkController {
             networkDirty = true;
         }
 
-        // 2. Process Direct Pipe Connections
-        for (BlockPos pipePos : cachedPipes) {
-            if (!level.isLoaded(pipePos)) continue;
-
-            BlockState pipeState = level.getBlockState(pipePos);
-            PipeBlock.PipeType pType = pipeState.getBlock() instanceof PipeBlock pb ? pb.getType() : PipeBlock.PipeType.UNIVERSAL;
-
-            for (Direction dir : Direction.values()) {
-                BlockPos neighborPos = pipePos.relative(dir);
-                if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos) || handledPositions.contains(neighborPos)) {
-                    continue;
-                }
-                if (!level.isLoaded(neighborPos)) continue;
-
-                BlockEntity be = level.getBlockEntity(neighborPos);
-                if (be == null) continue;
-
-                Direction side = dir.getOpposite();
-
-                // Item transfer
-                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ITEM) {
-                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, storageItemInjectors, machineItemInjectors, itemExtractors, handlerPositions, handlerPriorities, storageHandlers);
-                }
-
-                // Fluid transfer
-                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.FLUID) {
-                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, storageFluidInjectors, machineFluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, storageHandlers);
-                }
-
-                // Energy transfer
-                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.ENERGY) {
-                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, storageEnergyInjectors, machineEnergyInjectors, energyExtractors, handlerPositions, handlerPriorities, storageHandlers);
-                    EnergyTransferExecutor.collectMekanismCapabilities(
-                            be, side,
-                            true, true,
-                            mekEnergyInjectors, mekEnergyExtractors
-                    );
-                }
-
-                // Gas & Chemical transfer
-                if (pType == PipeBlock.PipeType.UNIVERSAL || pType == PipeBlock.PipeType.GAS) {
-                    GasTransferExecutor.collectCapabilities(
-                            be, side,
-                            true, true,
-                            gasInjectors, gasExtractors,
-                            infuseInjectors, infuseExtractors,
-                            pigmentInjectors, pigmentExtractors,
-                            slurryInjectors, slurryExtractors
-                    );
-                }
-            }
-        }
 
         // 2.5 Process Direct Controller Connections (Machine directly touching Controller)
         for (BlockPos ctrlPos : foundControllers) {
