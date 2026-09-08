@@ -3,12 +3,9 @@ package com.uup.core.transfer;
 import com.uup.config.ModConfig;
 import com.uup.core.network.DirectBufferStorage;
 import com.uup.logging.UUPLogger;
-import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity;
 import net.minecraftforge.items.IItemHandler;
 import net.minecraftforge.items.ItemHandlerHelper;
 import org.jetbrains.annotations.Nullable;
@@ -38,53 +35,12 @@ public class ItemTransferExecutor {
             long currentTick,
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache
     ) {
-        executeAllItemTransfers(extractors, injectors, overclocks, currentTick, persistentRejectionCache, null, null);
-    }
-
-    public static boolean isStorageBlockEntity(@Nullable BlockEntity be) {
-        if (be == null) return false;
-        if (be instanceof RandomizableContainerBlockEntity) return true;
-        String name = be.getClass().getName().toLowerCase(Locale.ROOT);
-        return name.contains("chest") || 
-               name.contains("barrel") || 
-               name.contains("storage") || 
-               name.contains("drawer") || 
-               name.contains("vault") || 
-               name.contains("bin") ||
-               name.contains("crate");
-    }
-
-    public static void executeAllItemTransfers(
-            List<IItemHandler> extractors,
-            List<IItemHandler> injectors,
-            int overclocks,
-            long currentTick,
-            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache,
-            @Nullable Map<Object, BlockPos> handlerPositions,
-            @Nullable Map<Object, Integer> handlerPriorities
-    ) {
-        executeAllItemTransfers(extractors, injectors, overclocks, currentTick, persistentRejectionCache, handlerPositions, handlerPriorities, null);
-    }
-
-    public static void executeAllItemTransfers(
-            List<IItemHandler> extractors,
-            List<IItemHandler> injectors,
-            int overclocks,
-            long currentTick,
-            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentRejectionCache,
-            @Nullable Map<Object, BlockPos> handlerPositions,
-            @Nullable Map<Object, Integer> handlerPriorities,
-            @Nullable Map<Object, BlockEntity> handlerBlockEntities
-    ) {
         if (extractors == null || extractors.isEmpty() || injectors == null || injectors.isEmpty()) {
             return;
         }
 
         Map<IItemHandler, Set<ItemKey>> sharedRejectedMap = new IdentityHashMap<>();
         Set<IItemHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
-
-        // 各 extractor ごとにソート済みターゲットリストをキャッシュ（同一Tick内で再利用）
-        Map<IItemHandler, List<IItemHandler>> sortedTargetsCache = new IdentityHashMap<>();
 
         for (IItemHandler extractor : extractors) {
             if (extractor == null) continue;
@@ -93,64 +49,9 @@ public class ItemTransferExecutor {
                 continue;
             }
 
-            List<IItemHandler> sortedTargets = sortedTargetsCache.computeIfAbsent(extractor, ext -> {
-                BlockEntity srcBe = handlerBlockEntities != null ? handlerBlockEntities.get(ext) : null;
-                BlockPos srcPos = handlerPositions != null ? handlerPositions.get(ext) : null;
-
-                List<IItemHandler> list = new ArrayList<>(injectors.size());
-                for (IItemHandler target : injectors) {
-                    if (target == null || target == ext) continue;
-
-                    BlockEntity targetBe = handlerBlockEntities != null ? handlerBlockEntities.get(target) : null;
-
-                    // [Crucial Fix 1: 同種機械ループの完全遮断]
-                    // 製錬工場から出たアイテムを別の製錬工場に搬入しようとする10,000回の無駄走査を完全排除！
-                    if (srcBe != null && targetBe != null) {
-                        if (srcBe.getClass() == targetBe.getClass() || 
-                            srcBe.getBlockState().getBlock() == targetBe.getBlockState().getBlock()) {
-                            continue;
-                        }
-                    }
-                    list.add(target);
-                }
-
-                if (list.size() > 1) {
-                    list.sort((t1, t2) -> {
-                        int p1 = handlerPriorities != null ? handlerPriorities.getOrDefault(t1, 0) : 0;
-                        int p2 = handlerPriorities != null ? handlerPriorities.getOrDefault(t2, 0) : 0;
-                        if (p1 != p2) return Integer.compare(p2, p1); // 優先度降順 (高い順)
-
-                        // [Crucial Fix 2: ストレージ（保管庫）最優先]
-                        // チェスト・バレルなどの純粋ストレージを加工機械よりも優先
-                        BlockEntity be1 = handlerBlockEntities != null ? handlerBlockEntities.get(t1) : null;
-                        BlockEntity be2 = handlerBlockEntities != null ? handlerBlockEntities.get(t2) : null;
-                        boolean isStorage1 = isStorageBlockEntity(be1);
-                        boolean isStorage2 = isStorageBlockEntity(be2);
-                        if (isStorage1 != isStorage2) {
-                            return isStorage1 ? -1 : 1;
-                        }
-
-                        // [Nearest-First: 搬出元から近い順]
-                        if (srcPos != null && handlerPositions != null) {
-                            BlockPos pos1 = handlerPositions.get(t1);
-                            BlockPos pos2 = handlerPositions.get(t2);
-                            if (pos1 != null && pos2 != null) {
-                                double d1 = srcPos.distSqr(pos1);
-                                double d2 = srcPos.distSqr(pos2);
-                                int cmp = Double.compare(d1, d2);
-                                if (cmp != 0) return cmp; // 距離昇順 (搬出元から近い順)
-                                return pos1.compareTo(pos2); // 決定論的順序
-                            }
-                        }
-                        return 0;
-                    });
-                }
-                return list;
-            });
-
             executeTransfer(
                     extractor,
-                    sortedTargets,
+                    injectors,
                     overclocks,
                     "UUP_Extract",
                     "UUP_Insert",
