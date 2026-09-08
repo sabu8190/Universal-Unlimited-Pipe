@@ -69,7 +69,9 @@ public class UUPLogger {
         } else if ("GAS".equalsIgnoreCase(type)) {
             TOTAL_GAS_TRANSFERRED.addAndGet(amount);
         }
-        debug(String.format("[UUP Transfer] Type=%s, Amount=%d, From=%s, To=%s", type, amount, from, to));
+        if (ModConfig.COMMON != null && ModConfig.COMMON.logLevel != null && "DEBUG".equalsIgnoreCase(ModConfig.COMMON.logLevel.get())) {
+            debug(String.format("[UUP Transfer] Type=%s, Amount=%d, From=%s, To=%s", type, amount, from, to));
+        }
     }
 
     private static synchronized void writeToFile(String level, String message, Throwable throwable) {

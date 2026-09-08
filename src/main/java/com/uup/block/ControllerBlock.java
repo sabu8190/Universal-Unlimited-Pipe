@@ -89,4 +89,34 @@ public class ControllerBlock extends Block implements EntityBlock {
         }
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
+
+    @Override
+    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
+        if (!state.is(newState.getBlock())) {
+            if (!level.isClientSide) {
+                BlockEntity be = level.getBlockEntity(pos);
+                if (be instanceof ControllerBlockEntity controllerBE) {
+                    java.util.List<com.uup.core.network.TransferNode> nodes = controllerBE.getNetwork().getNodes();
+                    int cardCount = 0;
+                    for (com.uup.core.network.TransferNode node : nodes) {
+                        if (node.isWirelessRemote()) {
+                            cardCount++;
+                        }
+                    }
+                    while (cardCount > 0) {
+                        int dropAmount = Math.min(cardCount, 64);
+                        net.minecraft.world.Containers.dropItemStack(
+                                level,
+                                pos.getX() + 0.5,
+                                pos.getY() + 0.5,
+                                pos.getZ() + 0.5,
+                                new ItemStack(com.uup.setup.ModItems.NETWORK_CARD.get(), dropAmount)
+                        );
+                        cardCount -= dropAmount;
+                    }
+                }
+            }
+            super.onRemove(state, level, pos, newState, isMoving);
+        }
+    }
 }
