@@ -343,124 +343,43 @@ public class ItemTransferExecutor {
         Map<IItemHandler, Set<ItemKey>> rejectedMap = sharedRejectedMap != null 
                 ? sharedRejectedMap : new IdentityHashMap<>();
 
-        List<IItemHandler> validTargets = new ArrayList<>(targetHandlers.size());
-        for (IItemHandler target : targetHandlers) {
-            if (target != null && target != sourceHandler) {
-                validTargets.add(target);
-            }
-        }
-        if (validTargets.isEmpty()) return 0;
-
         for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
             ItemStack inSlot = sourceHandler.getStackInSlot(slot);
             if (inSlot.isEmpty()) continue;
 
             ItemKey itemKey = ItemKey.of(inSlot);
 
-            // [Active Nearest-First Direct Routing]
-            // 1. Always try the nearest target (validTargets.get(0)) first to preserve closest-fill priority.
-            // 2. If the nearest is full, try activeTarget second, completely skipping dozens of full chests in O(1).
-            // 3. Fall back to sequential pre-sorted order for new targets.
-            IItemHandler nearestTarget = validTargets.get(0);
+            // [Fast Path 1: O(1) Direct Active Target Routing]
+            // If an active target is known and not rejected this tick, route directly with ZERO target list traversal!
             IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
-            if (activeTarget != null && (activeTarget == sourceHandler || !validTargets.contains(activeTarget))) {
-                ACTIVE_TARGET_BY_ITEM.remove(itemKey);
-                activeTarget = null;
-            }
-
-            List<IItemHandler> targetsToTry;
-            if (activeTarget != null && activeTarget != nearestTarget) {
-                targetsToTry = new ArrayList<>(validTargets.size());
-                targetsToTry.add(nearestTarget);
-                targetsToTry.add(activeTarget);
-                for (IItemHandler t : validTargets) {
-                    if (t != nearestTarget && t != activeTarget) {
-                        targetsToTry.add(t);
+            if (activeTarget != null && activeTarget != sourceHandler) {
+                Set<ItemKey> rejected = rejectedMap.get(activeTarget);
+                if (rejected == null || !rejected.contains(itemKey)) {
+                    int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                    if (moved > 0) {
+                        movedTotal += moved;
+                        continue; // Success in O(1)! Completely bypass dozens of target scans.
+                    } else {
+                        ACTIVE_TARGET_BY_ITEM.remove(itemKey);
                     }
                 }
-            } else {
-                targetsToTry = validTargets;
             }
 
-            for (IItemHandler target : targetsToTry) {
-                if (movedTotal >= maxToMove) break;
+            // [Fallback: Direct indexed scan (0 allocation) to find next available target]
+            int numTargets = targetHandlers.size();
+            for (int i = 0; i < numTargets && movedTotal < maxToMove; i++) {
+                IItemHandler target = targetHandlers.get(i);
+                if (target == null || target == sourceHandler || target == activeTarget) continue;
 
-                // Intra-tick rejection check: skip targets already proven full for this item in THIS tick
                 Set<ItemKey> rejected = rejectedMap.get(target);
                 if (rejected != null && rejected.contains(itemKey)) {
                     continue;
                 }
 
-                ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
-                if (currentInSlot.isEmpty()) break;
-
-                int currentLimit = (int) Math.min((long) currentInSlot.getCount(), maxToMove - movedTotal);
-                if (currentLimit <= 0) break;
-
-                // [Simulation verification: 0 wasted extraction and 0 unnecessary rollbacks]
-                ItemStack probeStack = currentInSlot.copy();
-                probeStack.setCount(currentLimit);
-
-                TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
-
-                // 最寄りターゲットは常に空き復帰を即座に検知できるよう、fullItems を一時クリアしてプローブ
-                if (target == nearestTarget) {
-                    targetState.fullItems.remove(itemKey);
-                }
-
-                ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true);
-                int accepted = currentLimit - simRemainder.getCount();
-
-                if (accepted <= 0) {
-                    // Mark as rejected only within the current tick to prevent target hopping across ticks
-                    rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
-                    if (target == activeTarget) {
-                        ACTIVE_TARGET_BY_ITEM.remove(itemKey);
-                    }
-                    continue;
-                }
-
-                // Extract only what is guaranteed to be accepted
-                ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
-                if (actuallyExtracted.isEmpty()) break;
-
-                // 抽出元に空きができたため、抽出元の fullItems を即座にクリア
-                TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
-                if (srcState != null) {
-                    srcState.fullItems.clear();
-                }
-
-                // Insert into target
-                ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
-                int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
-
-                if (actuallyMoved > 0) {
-                    movedTotal += actuallyMoved;
+                int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                if (moved > 0) {
+                    movedTotal += moved;
                     ACTIVE_TARGET_BY_ITEM.put(itemKey, target); // Directly route subsequent items here in O(1)
-                    if (receivedHandlers != null) {
-                        receivedHandlers.add(target);
-                    }
-                    targetState.fullItems.remove(itemKey);
-
-                    // ユーザー要望：どこにターゲッティングして移動したかを詳細ログ出力
-                    net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
-                    net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
-                    String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
-                    String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
-                    String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
-                    UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
-                }
-
-                // Minimal rollback in rare edge cases
-                if (!realRemainder.isEmpty()) {
-                    sourceHandler.insertItem(slot, realRemainder, false);
-                }
-
-                if (actuallyMoved == 0) {
-                    continue;
-                }
-
-                if (sourceHandler.getStackInSlot(slot).isEmpty()) {
                     break;
                 }
             }
@@ -470,6 +389,69 @@ public class ItemTransferExecutor {
             UUPLogger.logTransfer("ITEM", movedTotal, sourceLabel, targetLabel);
         }
         return movedTotal;
+    }
+
+    private static int tryTransferSlot(
+            IItemHandler sourceHandler,
+            IItemHandler target,
+            int slot,
+            ItemKey itemKey,
+            long remainingMoveLimit,
+            Map<IItemHandler, Set<ItemKey>> rejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            String sourceLabel,
+            String targetLabel
+    ) {
+        ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
+        if (currentInSlot.isEmpty()) return 0;
+
+        int currentLimit = (int) Math.min((long) currentInSlot.getCount(), remainingMoveLimit);
+        if (currentLimit <= 0) return 0;
+
+        TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
+
+        ItemStack probeStack = currentInSlot.copy();
+        probeStack.setCount(currentLimit);
+
+        ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true);
+        int accepted = currentLimit - simRemainder.getCount();
+
+        if (accepted <= 0) {
+            rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+            return 0;
+        }
+
+        ItemStack actuallyExtracted = sourceHandler.extractItem(slot, accepted, false);
+        if (actuallyExtracted.isEmpty()) return 0;
+
+        TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
+        if (srcState != null) {
+            srcState.fullItems.clear();
+        }
+
+        ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
+        int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
+
+        if (actuallyMoved > 0) {
+            if (receivedHandlers != null) {
+                receivedHandlers.add(target);
+            }
+            targetState.fullItems.remove(itemKey);
+
+            net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
+            net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
+            String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
+            String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
+            String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
+            UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
+        }
+
+        if (!realRemainder.isEmpty()) {
+            sourceHandler.insertItem(slot, realRemainder, false);
+        }
+
+        return actuallyMoved;
     }
 
     public static void dispatchInternalBuffer(

@@ -157,6 +157,7 @@ public class PipeBlock extends Block implements EntityBlock {
         if (!level.isClientSide) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof PipeBlockEntity pipeBE) {
+                pipeBE.invalidateInventoryCache();
                 pipeBE.markNetworkDirty();
             }
         }

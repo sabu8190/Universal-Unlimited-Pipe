@@ -467,14 +467,15 @@ public class NetworkController {
         }
     }
 
-    public void tickPipeExtract(ServerLevel level, PipeBlockEntity pipe) {
-        if (pipe == null) return;
+    public boolean tickPipeExtract(ServerLevel level, PipeBlockEntity pipe) {
+        if (pipe == null) return false;
         if (sharedAllItemInjectors.isEmpty() && sharedAllFluidInjectors.isEmpty() && sharedAllEnergyInjectors.isEmpty() 
                 && sharedMekEnergyInjectors.isEmpty() && sharedGasInjectors.isEmpty() && sharedInfuseInjectors.isEmpty() 
                 && sharedPigmentInjectors.isEmpty() && sharedSlurryInjectors.isEmpty()) {
-            return;
+            return false;
         }
 
+        boolean foundAnyInventory = false;
         BlockPos pipePos = pipe.getBlockPos();
         for (Direction dir : Direction.values()) {
             BlockPos neighborPos = pipePos.relative(dir);
@@ -491,6 +492,7 @@ public class NetworkController {
             BlockEntity neighborBE = level.getBlockEntity(neighborPos);
             if (neighborBE == null) continue;
 
+            foundAnyInventory = true;
             Direction side = dir.getOpposite();
             int nodeOverclocks = pipe.getUpgradeHandler(dir).getStackInSlot(0).getCount();
             int effectiveOverclocks = Math.max(this.overclockCount, nodeOverclocks);
@@ -581,6 +583,7 @@ public class NetworkController {
                 }
             }
         }
+        return foundAnyInventory;
     }
 
     public void tick(ServerLevel level, BlockPos originPos) {

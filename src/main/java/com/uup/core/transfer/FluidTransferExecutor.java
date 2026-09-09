@@ -134,13 +134,8 @@ public class FluidTransferExecutor {
         Map<IFluidHandler, Set<Fluid>> rejectedMap = sharedRejectedMap != null 
                 ? sharedRejectedMap : new IdentityHashMap<>();
 
-        List<IFluidHandler> validTargets = new ArrayList<>(targetHandlers.size());
-        for (IFluidHandler target : targetHandlers) {
-            if (target != null && target != sourceHandler) {
-                validTargets.add(target);
-            }
-        }
-        if (validTargets.isEmpty()) return 0;
+        int targetCount = targetHandlers.size();
+        if (targetCount == 0) return 0;
 
         if (tanks > 0) {
             for (int tank = 0; tank < tanks && filledTotal < maxToMove; tank++) {
@@ -148,7 +143,9 @@ public class FluidTransferExecutor {
                 if (inTank.isEmpty()) continue;
                 Fluid fluid = inTank.getFluid();
 
-                for (IFluidHandler target : validTargets) {
+                for (int i = 0; i < targetCount; i++) {
+                    IFluidHandler target = targetHandlers.get(i);
+                    if (target == null || target == sourceHandler) continue;
                     if (filledTotal >= maxToMove) break;
 
                     if (persistentCache != null) {
@@ -214,7 +211,9 @@ public class FluidTransferExecutor {
             }
         } else {
             // Fallback for fluid handlers where getTanks() returns 0
-            for (IFluidHandler target : validTargets) {
+            for (int i = 0; i < targetCount; i++) {
+                IFluidHandler target = targetHandlers.get(i);
+                if (target == null || target == sourceHandler) continue;
                 if (filledTotal >= maxToMove) break;
 
                 int queryLimit = (int) Math.min((long) Integer.MAX_VALUE, maxToMove - filledTotal);
