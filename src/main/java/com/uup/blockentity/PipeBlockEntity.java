@@ -59,8 +59,16 @@ public class PipeBlockEntity extends BlockEntity {
         }
     }
 
+    private NetworkController masterController = null;
+
     public void markNetworkDirty() {
         standaloneNetwork.markNetworkDirty();
+        this.masterController = null;
+    }
+
+    public void syncStandaloneMaster(NetworkController controller, BlockPos lowestPos, java.util.Set<BlockPos> controllers) {
+        this.masterController = controller;
+        standaloneNetwork.syncNetworkState(lowestPos, controllers);
     }
 
     public void syncStandaloneMaster(BlockPos lowestPos, java.util.Set<BlockPos> controllers) {
@@ -68,8 +76,17 @@ public class PipeBlockEntity extends BlockEntity {
     }
 
     public void serverTick(ServerLevel level) {
+        // 1. マスターパイプの判定とネットワーク準備（トポロジー探索・搬入先リスト構築＆最寄りソート）
         if (standaloneNetwork.shouldTickStandalone(worldPosition)) {
-            standaloneNetwork.tick(level, worldPosition);
+            standaloneNetwork.prepareNetworkTick(level, worldPosition);
+            this.masterController = standaloneNetwork;
+        }
+
+        // 2. 全パイプ共通：自分自身の隣接インベントリからの搬出を自身のTickで分散実行（負荷均等分散）！
+        if (masterController != null) {
+            masterController.tickPipeExtract(level, this);
+        } else if (standaloneNetwork.isMasterPipe(worldPosition)) {
+            standaloneNetwork.tickPipeExtract(level, this);
         }
     }
 

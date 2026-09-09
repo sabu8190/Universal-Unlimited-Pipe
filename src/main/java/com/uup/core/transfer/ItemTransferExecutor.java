@@ -447,8 +447,8 @@ public class ItemTransferExecutor {
                     net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
                     String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
                     String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
-                    String itemName = actuallyExtracted.getHoverName().getString();
-                    UUPLogger.info(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
+                    String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
+                    UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
                 }
 
                 // Minimal rollback in rare edge cases

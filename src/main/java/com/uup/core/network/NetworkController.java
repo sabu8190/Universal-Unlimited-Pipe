@@ -48,6 +48,36 @@ public class NetworkController {
     private final Map<IFluidHandler, Map<net.minecraft.world.level.material.Fluid, Long>> fluidRejectionCache = new IdentityHashMap<>();
     private final Map<IEnergyStorage, Long> energyRejectionCache = new IdentityHashMap<>();
 
+    // Shared Injector Targets across the network (Prepared by master pipe, read by worker pipes)
+    private final List<IItemHandler> sharedStorageItemInjectors = new ArrayList<>();
+    private final List<IItemHandler> sharedMachineItemInjectors = new ArrayList<>();
+    private final List<IItemHandler> sharedAllItemInjectors = new ArrayList<>();
+
+    private final List<IFluidHandler> sharedStorageFluidInjectors = new ArrayList<>();
+    private final List<IFluidHandler> sharedMachineFluidInjectors = new ArrayList<>();
+    private final List<IFluidHandler> sharedAllFluidInjectors = new ArrayList<>();
+
+    private final List<IEnergyStorage> sharedStorageEnergyInjectors = new ArrayList<>();
+    private final List<IEnergyStorage> sharedMachineEnergyInjectors = new ArrayList<>();
+    private final List<IEnergyStorage> sharedAllEnergyInjectors = new ArrayList<>();
+
+    private final List<Object> sharedMekEnergyInjectors = new ArrayList<>();
+    private final List<Object> sharedGasInjectors = new ArrayList<>();
+    private final List<Object> sharedInfuseInjectors = new ArrayList<>();
+    private final List<Object> sharedPigmentInjectors = new ArrayList<>();
+    private final List<Object> sharedSlurryInjectors = new ArrayList<>();
+
+    private final Map<Object, BlockPos> sharedHandlerPositions = new IdentityHashMap<>();
+    private final Map<Object, Integer> sharedHandlerPriorities = new IdentityHashMap<>();
+    private final Set<Object> sharedStorageHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+
+    // Per-Tick Shared Deduplication & Fast-Skip Maps
+    private final Map<IItemHandler, Set<ItemTransferExecutor.ItemKey>> tickItemRejectedMap = new IdentityHashMap<>();
+    private final Set<IItemHandler> tickReceivedItemHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<IFluidHandler, Set<net.minecraft.world.level.material.Fluid>> tickFluidRejectedMap = new IdentityHashMap<>();
+    private final Set<IFluidHandler> tickReceivedFluidHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<IEnergyStorage> tickReceivedEnergyHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+
     public NetworkController() {
     }
 
@@ -165,10 +195,10 @@ public class NetworkController {
 
         // 同一配管網内の他のすべてのPipeBlockEntityにマスター情報を即時同期し、初回重複スキャンを完全防止
         for (BlockPos pPos : cachedPipes) {
-            if (!pPos.equals(startPos) && level.isLoaded(pPos)) {
+            if (level.isLoaded(pPos)) {
                 BlockEntity be = level.getBlockEntity(pPos);
                 if (be instanceof PipeBlockEntity otherPipe) {
-                    otherPipe.syncStandaloneMaster(lowestPipePos, foundControllers);
+                    otherPipe.syncStandaloneMaster(this, lowestPipePos, foundControllers);
                 }
             }
         }
@@ -260,7 +290,7 @@ public class NetworkController {
         });
     }
 
-    public void tick(ServerLevel level, BlockPos originPos) {
+    public void prepareNetworkTick(ServerLevel level, BlockPos originPos) {
         tickCounter++;
         int interval = ModConfig.COMMON != null && ModConfig.COMMON.tickInterval != null 
                 ? ModConfig.COMMON.tickInterval.get() : 1;
@@ -273,37 +303,38 @@ public class NetworkController {
             rebuildPipeNetwork(level, originPos);
         }
 
-        List<IItemHandler> storageItemInjectors = new ArrayList<>();
-        List<IItemHandler> machineItemInjectors = new ArrayList<>();
-        List<IItemHandler> itemExtractors = new ArrayList<>();
+        // Per-Tick Shared Deduplication & Fast-Skip Maps
+        tickItemRejectedMap.clear();
+        tickReceivedItemHandlers.clear();
+        tickFluidRejectedMap.clear();
+        tickReceivedFluidHandlers.clear();
+        tickReceivedEnergyHandlers.clear();
 
-        List<IFluidHandler> storageFluidInjectors = new ArrayList<>();
-        List<IFluidHandler> machineFluidInjectors = new ArrayList<>();
-        List<IFluidHandler> fluidExtractors = new ArrayList<>();
+        sharedStorageItemInjectors.clear();
+        sharedMachineItemInjectors.clear();
+        sharedAllItemInjectors.clear();
 
-        List<IEnergyStorage> storageEnergyInjectors = new ArrayList<>();
-        List<IEnergyStorage> machineEnergyInjectors = new ArrayList<>();
-        List<IEnergyStorage> energyExtractors = new ArrayList<>();
+        sharedStorageFluidInjectors.clear();
+        sharedMachineFluidInjectors.clear();
+        sharedAllFluidInjectors.clear();
 
-        Map<Object, BlockPos> handlerPositions = new IdentityHashMap<>();
-        Map<Object, Integer> handlerPriorities = new IdentityHashMap<>();
-        Set<Object> storageHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+        sharedStorageEnergyInjectors.clear();
+        sharedMachineEnergyInjectors.clear();
+        sharedAllEnergyInjectors.clear();
 
-        List<Object> mekEnergyInjectors = new ArrayList<>();
-        List<Object> mekEnergyExtractors = new ArrayList<>();
+        sharedMekEnergyInjectors.clear();
+        sharedGasInjectors.clear();
+        sharedInfuseInjectors.clear();
+        sharedPigmentInjectors.clear();
+        sharedSlurryInjectors.clear();
 
-        List<Object> gasInjectors = new ArrayList<>();
-        List<Object> gasExtractors = new ArrayList<>();
-        List<Object> infuseInjectors = new ArrayList<>();
-        List<Object> infuseExtractors = new ArrayList<>();
-        List<Object> pigmentInjectors = new ArrayList<>();
-        List<Object> pigmentExtractors = new ArrayList<>();
-        List<Object> slurryInjectors = new ArrayList<>();
-        List<Object> slurryExtractors = new ArrayList<>();
+        sharedHandlerPositions.clear();
+        sharedHandlerPriorities.clear();
+        sharedStorageHandlers.clear();
 
         Set<BlockPos> handledPositions = new HashSet<>();
 
-        // 1. Process configured wireless nodes and connected nodes
+        // 1. Collect configured wireless nodes and connected nodes
         List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
 
         // Process physically connected wired transfer nodes (Must be adjacent to a pipe in cachedPipes)
@@ -316,7 +347,7 @@ public class NetworkController {
             }
         }
 
-        // Collect configured side nodes from PipeBlockEntities
+        // Collect configured side nodes from PipeBlockEntities (INSERT only for shared injector targets)
         for (BlockPos pipePos : cachedPipes) {
             if (level.isLoaded(pipePos)) {
                 BlockEntity be = level.getBlockEntity(pipePos);
@@ -324,20 +355,18 @@ public class NetworkController {
                     for (Direction dir : Direction.values()) {
                         BlockPos adj = pipePos.relative(dir);
                         if (!cachedPipes.contains(adj) && !foundControllers.contains(adj)) {
-                            allActiveNodes.add(pipeBE.toNodeData(dir));
+                            TransferNode node = pipeBE.toNodeData(dir);
+                            if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
+                                allActiveNodes.add(node);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Sort nodes by Priority descending (Higher priority processed first)
+        // Sort nodes by Priority descending
         allActiveNodes.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
-
-        int totalNodeOverclocks = overclockCount;
-        for (TransferNode node : allActiveNodes) {
-            totalNodeOverclocks = Math.max(totalNodeOverclocks, node.getOverclocks());
-        }
 
         List<TransferNode> brokenWirelessNodes = null;
 
@@ -350,7 +379,6 @@ public class NetworkController {
 
             BlockEntity be = targetLevel.getBlockEntity(targetPos);
 
-            // On-demand detection: if target machine is missing/destroyed for a wireless node
             if (node.isWirelessRemote() && (be == null || targetLevel.getBlockState(targetPos).isAir())) {
                 Containers.dropItemStack(
                         targetLevel,
@@ -372,26 +400,16 @@ public class NetworkController {
             handledPositions.add(targetPos);
             Direction side = node.getTargetSide().getOpposite();
             boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
-            boolean canExtract = node.getMode() == TransferMode.EXTRACT || node.getMode() == TransferMode.BOTH;
             int nodePriority = node.getPriority();
-            collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, canInsert, canExtract, storageItemInjectors, machineItemInjectors, itemExtractors, handlerPositions, handlerPriorities, storageHandlers);
-            collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, canInsert, canExtract, storageFluidInjectors, machineFluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, storageHandlers);
-            collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, canInsert, canExtract, storageEnergyInjectors, machineEnergyInjectors, energyExtractors, handlerPositions, handlerPriorities, storageHandlers);
 
-            EnergyTransferExecutor.collectMekanismCapabilities(
-                    be, side,
-                    canInsert, canExtract,
-                    mekEnergyInjectors, mekEnergyExtractors
-            );
+            if (canInsert) {
+                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
+                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
+                collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
 
-            GasTransferExecutor.collectCapabilities(
-                    be, side,
-                    canInsert, canExtract,
-                    gasInjectors, gasExtractors,
-                    infuseInjectors, infuseExtractors,
-                    pigmentInjectors, pigmentExtractors,
-                    slurryInjectors, slurryExtractors
-            );
+                EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+            }
         }
 
         if (brokenWirelessNodes != null) {
@@ -399,8 +417,7 @@ public class NetworkController {
             networkDirty = true;
         }
 
-
-        // 2.5 Process Direct Controller Connections (Machine directly touching Controller)
+        // Direct Controller Connections (Machine directly touching Controller)
         for (BlockPos ctrlPos : foundControllers) {
             if (!level.isLoaded(ctrlPos)) continue;
 
@@ -416,75 +433,194 @@ public class NetworkController {
 
                 Direction side = dir.getOpposite();
 
-                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, true, storageItemInjectors, machineItemInjectors, itemExtractors, handlerPositions, handlerPriorities, storageHandlers);
-                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, true, storageFluidInjectors, machineFluidInjectors, fluidExtractors, handlerPositions, handlerPriorities, storageHandlers);
-                collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, true, storageEnergyInjectors, machineEnergyInjectors, energyExtractors, handlerPositions, handlerPriorities, storageHandlers);
+                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
+                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
+                collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
 
-                EnergyTransferExecutor.collectMekanismCapabilities(
-                        be, side,
-                        true, true,
-                        mekEnergyInjectors, mekEnergyExtractors
-                );
-
-                GasTransferExecutor.collectCapabilities(
-                        be, side,
-                        true, true,
-                        gasInjectors, gasExtractors,
-                        infuseInjectors, infuseExtractors,
-                        pigmentInjectors, pigmentExtractors,
-                        slurryInjectors, slurryExtractors
-                );
+                EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
             }
         }
 
-        int effectiveOverclocks = Math.max(overclockCount, totalNodeOverclocks);
+        // Sort storage injectors once per tick: Priority descending, then distance from origin ascending (Nearest-First)
+        sortStorageInjectors(sharedStorageItemInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
+        sortStorageInjectors(sharedStorageFluidInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
+        sortStorageInjectors(sharedStorageEnergyInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
 
-        List<IItemHandler> allItemInjectors = new ArrayList<>(storageItemInjectors.size() + machineItemInjectors.size());
-        allItemInjectors.addAll(storageItemInjectors);
-        allItemInjectors.addAll(machineItemInjectors);
+        sharedAllItemInjectors.addAll(sharedStorageItemInjectors);
+        sharedAllItemInjectors.addAll(sharedMachineItemInjectors);
 
-        List<IFluidHandler> allFluidInjectors = new ArrayList<>(storageFluidInjectors.size() + machineFluidInjectors.size());
-        allFluidInjectors.addAll(storageFluidInjectors);
-        allFluidInjectors.addAll(machineFluidInjectors);
+        sharedAllFluidInjectors.addAll(sharedStorageFluidInjectors);
+        sharedAllFluidInjectors.addAll(sharedMachineFluidInjectors);
 
-        List<IEnergyStorage> allEnergyInjectors = new ArrayList<>(storageEnergyInjectors.size() + machineEnergyInjectors.size());
-        allEnergyInjectors.addAll(storageEnergyInjectors);
-        allEnergyInjectors.addAll(machineEnergyInjectors);
+        sharedAllEnergyInjectors.addAll(sharedStorageEnergyInjectors);
+        sharedAllEnergyInjectors.addAll(sharedMachineEnergyInjectors);
 
-        // 3. Controller Internal Buffer Transfer (Dispatch & Ingest for all resources)
+        // Controller Internal Buffer Transfer (Dispatch to shared targets)
         if (!foundControllers.isEmpty()) {
-            // Dispatch internal buffer -> network injection targets
-            ItemTransferExecutor.dispatchInternalBuffer(directBuffer, allItemInjectors, effectiveOverclocks);
-            FluidTransferExecutor.dispatchInternalBuffer(directBuffer, allFluidInjectors, effectiveOverclocks);
-            EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, allEnergyInjectors, effectiveOverclocks);
-            EnergyTransferExecutor.dispatchMekanismBuffer(directBuffer.getMekanismBuffer(), mekEnergyInjectors, effectiveOverclocks);
-            GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), gasInjectors, infuseInjectors, pigmentInjectors, slurryInjectors, effectiveOverclocks);
+            int effectiveOverclocks = overclockCount;
+            ItemTransferExecutor.dispatchInternalBuffer(directBuffer, sharedAllItemInjectors, effectiveOverclocks);
+            FluidTransferExecutor.dispatchInternalBuffer(directBuffer, sharedAllFluidInjectors, effectiveOverclocks);
+            EnergyTransferExecutor.dispatchInternalBuffer(directBuffer, sharedAllEnergyInjectors, effectiveOverclocks);
+            EnergyTransferExecutor.dispatchMekanismBuffer(directBuffer.getMekanismBuffer(), sharedMekEnergyInjectors, effectiveOverclocks);
+            GasTransferExecutor.dispatchInternalBuffer(directBuffer.getMekanismBuffer(), sharedGasInjectors, sharedInfuseInjectors, sharedPigmentInjectors, sharedSlurryInjectors, effectiveOverclocks);
+        }
+    }
 
-            // Ingest network extraction sources -> internal buffer
+    public void tickPipeExtract(ServerLevel level, PipeBlockEntity pipe) {
+        if (pipe == null) return;
+        if (sharedAllItemInjectors.isEmpty() && sharedAllFluidInjectors.isEmpty() && sharedAllEnergyInjectors.isEmpty() 
+                && sharedMekEnergyInjectors.isEmpty() && sharedGasInjectors.isEmpty() && sharedInfuseInjectors.isEmpty() 
+                && sharedPigmentInjectors.isEmpty() && sharedSlurryInjectors.isEmpty()) {
+            return;
+        }
+
+        BlockPos pipePos = pipe.getBlockPos();
+        for (Direction dir : Direction.values()) {
+            BlockPos neighborPos = pipePos.relative(dir);
+            if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos)) {
+                continue;
+            }
+            if (!level.isLoaded(neighborPos)) continue;
+
+            TransferMode mode = pipe.getMode(dir);
+            if (mode != TransferMode.EXTRACT && mode != TransferMode.BOTH) {
+                continue;
+            }
+
+            BlockEntity neighborBE = level.getBlockEntity(neighborPos);
+            if (neighborBE == null) continue;
+
+            Direction side = dir.getOpposite();
+            int nodeOverclocks = pipe.getUpgradeHandler(dir).getStackInSlot(0).getCount();
+            int effectiveOverclocks = Math.max(this.overclockCount, nodeOverclocks);
+
+            // 1. アイテム分散搬出
+            if (!sharedAllItemInjectors.isEmpty()) {
+                var itemOpt = neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, side);
+                IItemHandler itemHandler = itemOpt.isPresent() ? itemOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
+                if (itemHandler != null && !tickReceivedItemHandlers.contains(itemHandler)) {
+                    sharedHandlerPositions.putIfAbsent(itemHandler, neighborPos);
+                    ItemTransferExecutor.executeTransfer(
+                            itemHandler,
+                            sharedAllItemInjectors,
+                            effectiveOverclocks,
+                            neighborPos.toShortString(),
+                            "Network_Target",
+                            tickItemRejectedMap,
+                            tickReceivedItemHandlers,
+                            0L,
+                            null,
+                            sharedHandlerPositions
+                    );
+                }
+            }
+
+            // 2. 流体分散搬出
+            if (!sharedAllFluidInjectors.isEmpty()) {
+                var fluidOpt = neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, side);
+                IFluidHandler fluidHandler = fluidOpt.isPresent() ? fluidOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, null).orElse(null);
+                if (fluidHandler != null && !tickReceivedFluidHandlers.contains(fluidHandler)) {
+                    sharedHandlerPositions.putIfAbsent(fluidHandler, neighborPos);
+                    FluidTransferExecutor.executeTransfer(
+                            fluidHandler,
+                            sharedAllFluidInjectors,
+                            effectiveOverclocks,
+                            neighborPos.toShortString(),
+                            "Network_Fluid_Target",
+                            tickFluidRejectedMap,
+                            tickReceivedFluidHandlers,
+                            0L,
+                            null
+                    );
+                }
+            }
+
+            // 3. エネルギー分散搬出
+            if (!sharedAllEnergyInjectors.isEmpty()) {
+                var energyOpt = neighborBE.getCapability(ForgeCapabilities.ENERGY, side);
+                IEnergyStorage energyHandler = energyOpt.isPresent() ? energyOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.ENERGY, null).orElse(null);
+                if (energyHandler != null && !tickReceivedEnergyHandlers.contains(energyHandler)) {
+                    sharedHandlerPositions.putIfAbsent(energyHandler, neighborPos);
+                    EnergyTransferExecutor.executeTransfer(
+                            energyHandler,
+                            sharedAllEnergyInjectors,
+                            effectiveOverclocks,
+                            neighborPos.toShortString(),
+                            "Network_Energy_Target",
+                            tickReceivedEnergyHandlers,
+                            0L,
+                            null
+                    );
+                }
+            }
+
+            // 4. Mekanism エネルギー＆ガス分散搬出
+            if (!sharedMekEnergyInjectors.isEmpty()) {
+                List<Object> singleMekExt = new ArrayList<>(1);
+                EnergyTransferExecutor.collectMekanismCapabilities(neighborBE, side, false, true, null, singleMekExt);
+                if (!singleMekExt.isEmpty()) {
+                    EnergyTransferExecutor.executeMekanismTransfers(singleMekExt, sharedMekEnergyInjectors, effectiveOverclocks);
+                }
+            }
+
+            if (!sharedGasInjectors.isEmpty() || !sharedInfuseInjectors.isEmpty() || !sharedPigmentInjectors.isEmpty() || !sharedSlurryInjectors.isEmpty()) {
+                List<Object> sGasExt = new ArrayList<>(1);
+                List<Object> sInfExt = new ArrayList<>(1);
+                List<Object> sPigExt = new ArrayList<>(1);
+                List<Object> sSluExt = new ArrayList<>(1);
+                GasTransferExecutor.collectCapabilities(neighborBE, side, false, true, null, sGasExt, null, sInfExt, null, sPigExt, null, sSluExt);
+                if (!sGasExt.isEmpty() || !sInfExt.isEmpty() || !sPigExt.isEmpty() || !sSluExt.isEmpty()) {
+                    GasTransferExecutor.executeAllTransfers(
+                            sharedGasInjectors, sGasExt,
+                            sharedInfuseInjectors, sInfExt,
+                            sharedPigmentInjectors, sPigExt,
+                            sharedSlurryInjectors, sSluExt,
+                            effectiveOverclocks
+                    );
+                }
+            }
+        }
+    }
+
+    public void tick(ServerLevel level, BlockPos originPos) {
+        prepareNetworkTick(level, originPos);
+
+        // Fallback for Controller ingest & wireless extraction
+        if (!foundControllers.isEmpty()) {
+            List<IItemHandler> itemExtractors = new ArrayList<>();
+            List<IFluidHandler> fluidExtractors = new ArrayList<>();
+            List<IEnergyStorage> energyExtractors = new ArrayList<>();
+            List<Object> mekEnergyExtractors = new ArrayList<>();
+            List<Object> gasExtractors = new ArrayList<>();
+            List<Object> infuseExtractors = new ArrayList<>();
+            List<Object> pigmentExtractors = new ArrayList<>();
+            List<Object> slurryExtractors = new ArrayList<>();
+
+            for (BlockPos ctrlPos : foundControllers) {
+                if (!level.isLoaded(ctrlPos)) continue;
+                for (Direction dir : Direction.values()) {
+                    BlockPos neighborPos = ctrlPos.relative(dir);
+                    if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos)) continue;
+                    if (!level.isLoaded(neighborPos)) continue;
+                    BlockEntity be = level.getBlockEntity(neighborPos);
+                    if (be == null) continue;
+                    Direction side = dir.getOpposite();
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, false, true, null, null, itemExtractors, null, null, null);
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, false, true, null, null, fluidExtractors, null, null, null);
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, false, true, null, null, energyExtractors, null, null, null);
+                    EnergyTransferExecutor.collectMekanismCapabilities(be, side, false, true, null, mekEnergyExtractors);
+                    GasTransferExecutor.collectCapabilities(be, side, false, true, null, gasExtractors, null, infuseExtractors, null, pigmentExtractors, null, slurryExtractors);
+                }
+            }
+
+            int effectiveOverclocks = overclockCount;
             ItemTransferExecutor.ingestToInternalBuffer(directBuffer, itemExtractors, effectiveOverclocks);
             FluidTransferExecutor.ingestToInternalBuffer(directBuffer, fluidExtractors, effectiveOverclocks);
             EnergyTransferExecutor.ingestToInternalBuffer(directBuffer, energyExtractors, effectiveOverclocks);
             EnergyTransferExecutor.ingestMekanismBuffer(directBuffer.getMekanismBuffer(), mekEnergyExtractors, effectiveOverclocks);
             GasTransferExecutor.ingestToInternalBuffer(directBuffer.getMekanismBuffer(), gasExtractors, infuseExtractors, pigmentExtractors, slurryExtractors, effectiveOverclocks);
         }
-
-        // 4. Sort storage injectors once per tick: Priority descending, then distance from origin ascending (Nearest-First)
-        sortStorageInjectors(storageItemInjectors, originPos, handlerPositions, handlerPriorities);
-        sortStorageInjectors(storageFluidInjectors, originPos, handlerPositions, handlerPriorities);
-        sortStorageInjectors(storageEnergyInjectors, originPos, handlerPositions, handlerPriorities);
-
-        // 5. Execute transfers between extractors and injectors
-        ItemTransferExecutor.executeAllItemTransfers(itemExtractors, storageItemInjectors, machineItemInjectors, storageHandlers, effectiveOverclocks, handlerPositions);
-        FluidTransferExecutor.executeAllFluidTransfers(fluidExtractors, storageFluidInjectors, machineFluidInjectors, storageHandlers, effectiveOverclocks);
-        EnergyTransferExecutor.executeAllEnergyTransfers(energyExtractors, storageEnergyInjectors, machineEnergyInjectors, storageHandlers, effectiveOverclocks);
-        EnergyTransferExecutor.executeMekanismTransfers(mekEnergyExtractors, mekEnergyInjectors, effectiveOverclocks);
-        GasTransferExecutor.executeAllTransfers(
-                gasInjectors, gasExtractors,
-                infuseInjectors, infuseExtractors,
-                pigmentInjectors, pigmentExtractors,
-                slurryInjectors, slurryExtractors,
-                effectiveOverclocks
-        );
     }
 
     public CompoundTag serializeNBT() {
