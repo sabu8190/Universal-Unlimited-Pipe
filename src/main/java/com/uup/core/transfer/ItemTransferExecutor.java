@@ -408,7 +408,7 @@ public class ItemTransferExecutor {
 
         int numMachines = machineTargets != null ? machineTargets.size() : 0;
         int opCount = 0;
-        int maxOperations = 64; // Prevents freezing: max 64 batch transfers per pipe tick (up to 4,096+ items/tick)
+        int maxOperations = 512; // Prevents freezing while allowing extreme throughput: up to 32,768 items/tick
 
         for (int slot = 0; slot < slots && movedTotal < maxToMove && opCount < maxOperations; slot++) {
             while (movedTotal < maxToMove && opCount++ < maxOperations) {

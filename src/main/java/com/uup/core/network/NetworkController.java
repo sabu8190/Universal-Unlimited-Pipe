@@ -70,6 +70,13 @@ public class NetworkController {
     private final Map<Object, BlockPos> sharedHandlerPositions = new IdentityHashMap<>();
     private final Map<Object, Integer> sharedHandlerPriorities = new IdentityHashMap<>();
     private final Set<Object> sharedStorageHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<Object> sharedTrashHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final List<IItemHandler> sharedTrashItemInjectors = new ArrayList<>();
+    private final List<IFluidHandler> sharedTrashFluidInjectors = new ArrayList<>();
+
+    // Injector Scan Cache to eliminate 8,000+ redundant scans per tick on master pipe
+    private boolean injectorsDirty = true;
+    private long lastInjectorsScanTick = -100L;
 
     // Per-Tick Shared Deduplication & Fast-Skip Maps
     private final Map<IItemHandler, Set<ItemTransferExecutor.ItemKey>> tickItemRejectedMap = new IdentityHashMap<>();
@@ -100,6 +107,7 @@ public class NetworkController {
 
     public void markNetworkDirty() {
         this.networkDirty = true;
+        this.injectorsDirty = true;
     }
 
     public boolean hasController() {
@@ -130,12 +138,14 @@ public class NetworkController {
     public void addNode(TransferNode node) {
         if (!configuredNodes.contains(node)) {
             configuredNodes.add(node);
+            this.injectorsDirty = true;
             UUPLogger.info(String.format("Added UUP configured node at %s (Mode=%s, Channel=%d)", node.getPos(), node.getMode(), node.getChannelId()));
         }
     }
 
     public void removeNode(TransferNode node) {
         configuredNodes.remove(node);
+        this.injectorsDirty = true;
         UUPLogger.info(String.format("Removed UUP node at %s", node.getPos()));
     }
 
@@ -147,6 +157,7 @@ public class NetworkController {
         fluidRejectionCache.clear();
         energyRejectionCache.clear();
         lowestPipePos = null;
+        this.injectorsDirty = true;
 
         Queue<BlockPos> queue = new ArrayDeque<>();
         Set<BlockPos> visited = new HashSet<>();
@@ -214,17 +225,19 @@ public class NetworkController {
             boolean canExtract,
             List<T> storageInjectors,
             List<T> machineInjectors,
+            List<T> trashInjectors,
             List<T> extractors,
             Map<Object, BlockPos> positions,
             Map<Object, Integer> priorities,
-            Set<Object> storageSet
+            Set<Object> storageSet,
+            Set<Object> trashSet
     ) {
         if (be == null) return;
         var opt = be.getCapability(cap, side);
         if (opt.isPresent()) {
-            opt.ifPresent(handler -> registerCap(handler, be, priority, canInsert, canExtract, storageInjectors, machineInjectors, extractors, positions, priorities, storageSet));
+            opt.ifPresent(handler -> registerCap(handler, be, priority, canInsert, canExtract, storageInjectors, machineInjectors, trashInjectors, extractors, positions, priorities, storageSet, trashSet));
         } else if (side != null) {
-            be.getCapability(cap, null).ifPresent(handler -> registerCap(handler, be, priority, canInsert, canExtract, storageInjectors, machineInjectors, extractors, positions, priorities, storageSet));
+            be.getCapability(cap, null).ifPresent(handler -> registerCap(handler, be, priority, canInsert, canExtract, storageInjectors, machineInjectors, trashInjectors, extractors, positions, priorities, storageSet, trashSet));
         }
     }
 
@@ -236,10 +249,12 @@ public class NetworkController {
             boolean canExtract,
             List<T> storageInjectors,
             List<T> machineInjectors,
+            List<T> trashInjectors,
             List<T> extractors,
             Map<Object, BlockPos> positions,
             Map<Object, Integer> priorities,
-            Set<Object> storageSet
+            Set<Object> storageSet,
+            Set<Object> trashSet
     ) {
         if (positions != null && be != null) {
             positions.put(handler, be.getBlockPos());
@@ -255,8 +270,15 @@ public class NetworkController {
         if (isStorage && storageSet != null) {
             storageSet.add(handler);
         }
+        boolean isTrash = StorageDetector.isTrashCan(be);
+        if (isTrash && trashSet != null) {
+            trashSet.add(handler);
+        }
 
         if (canInsert) {
+            if (isTrash && trashInjectors != null) {
+                if (!trashInjectors.contains(handler)) trashInjectors.add(handler);
+            }
             if (isStorage) {
                 if (!storageInjectors.contains(handler)) storageInjectors.add(handler);
             } else {
@@ -316,151 +338,163 @@ public class NetworkController {
         tickReceivedEnergyHandlers.clear();
         tickAllMachinesFullSet.clear();
 
-        sharedStorageItemInjectors.clear();
-        sharedMachineItemInjectors.clear();
-        sharedAllItemInjectors.clear();
+        long gameTime = level.getGameTime();
+        boolean shouldRescan = injectorsDirty || (gameTime - lastInjectorsScanTick >= 40) || (gameTime < lastInjectorsScanTick);
 
-        sharedStorageFluidInjectors.clear();
-        sharedMachineFluidInjectors.clear();
-        sharedAllFluidInjectors.clear();
+        if (shouldRescan) {
+            lastInjectorsScanTick = gameTime;
+            injectorsDirty = false;
 
-        sharedStorageEnergyInjectors.clear();
-        sharedMachineEnergyInjectors.clear();
-        sharedAllEnergyInjectors.clear();
+            sharedStorageItemInjectors.clear();
+            sharedMachineItemInjectors.clear();
+            sharedAllItemInjectors.clear();
+            sharedTrashItemInjectors.clear();
 
-        sharedMekEnergyInjectors.clear();
-        sharedGasInjectors.clear();
-        sharedInfuseInjectors.clear();
-        sharedPigmentInjectors.clear();
-        sharedSlurryInjectors.clear();
+            sharedStorageFluidInjectors.clear();
+            sharedMachineFluidInjectors.clear();
+            sharedAllFluidInjectors.clear();
+            sharedTrashFluidInjectors.clear();
 
-        sharedHandlerPositions.clear();
-        sharedHandlerPriorities.clear();
-        sharedStorageHandlers.clear();
+            sharedStorageEnergyInjectors.clear();
+            sharedMachineEnergyInjectors.clear();
+            sharedAllEnergyInjectors.clear();
 
-        Set<BlockPos> handledPositions = new HashSet<>();
+            sharedMekEnergyInjectors.clear();
+            sharedGasInjectors.clear();
+            sharedInfuseInjectors.clear();
+            sharedPigmentInjectors.clear();
+            sharedSlurryInjectors.clear();
 
-        // 1. Collect configured wireless nodes and connected nodes
-        List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
+            sharedHandlerPositions.clear();
+            sharedHandlerPriorities.clear();
+            sharedStorageHandlers.clear();
+            sharedTrashHandlers.clear();
 
-        // Process physically connected wired transfer nodes (Must be adjacent to a pipe in cachedPipes)
-        for (BlockPos nodePos : scannedNodePositions) {
-            if (level.isLoaded(nodePos)) {
-                BlockEntity be = level.getBlockEntity(nodePos);
-                if (be instanceof NodeBlockEntity nodeBE) {
-                    allActiveNodes.add(nodeBE.toNodeData());
+            Set<BlockPos> handledPositions = new HashSet<>();
+
+            // 1. Collect configured wireless nodes and connected nodes
+            List<TransferNode> allActiveNodes = new ArrayList<>(configuredNodes);
+
+            // Process physically connected wired transfer nodes (Must be adjacent to a pipe in cachedPipes)
+            for (BlockPos nodePos : scannedNodePositions) {
+                if (level.isLoaded(nodePos)) {
+                    BlockEntity be = level.getBlockEntity(nodePos);
+                    if (be instanceof NodeBlockEntity nodeBE) {
+                        allActiveNodes.add(nodeBE.toNodeData());
+                    }
                 }
             }
-        }
 
-        // Collect configured side nodes from PipeBlockEntities (INSERT only for shared injector targets)
-        for (BlockPos pipePos : cachedPipes) {
-            if (level.isLoaded(pipePos)) {
-                BlockEntity be = level.getBlockEntity(pipePos);
-                if (be instanceof PipeBlockEntity pipeBE) {
-                    for (Direction dir : Direction.values()) {
-                        BlockPos adj = pipePos.relative(dir);
-                        if (!cachedPipes.contains(adj) && !foundControllers.contains(adj)) {
-                            TransferNode node = pipeBE.toNodeData(dir);
-                            if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
-                                allActiveNodes.add(node);
+            // Collect configured side nodes from PipeBlockEntities (INSERT only for shared injector targets)
+            for (BlockPos pipePos : cachedPipes) {
+                if (level.isLoaded(pipePos)) {
+                    BlockEntity be = level.getBlockEntity(pipePos);
+                    if (be instanceof PipeBlockEntity pipeBE) {
+                        for (Direction dir : Direction.values()) {
+                            BlockPos adj = pipePos.relative(dir);
+                            if (!cachedPipes.contains(adj) && !foundControllers.contains(adj)) {
+                                TransferNode node = pipeBE.toNodeData(dir);
+                                if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
+                                    allActiveNodes.add(node);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Sort nodes by Priority descending
-        allActiveNodes.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
+            // Sort nodes by Priority descending
+            allActiveNodes.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
 
-        List<TransferNode> brokenWirelessNodes = null;
+            List<TransferNode> brokenWirelessNodes = null;
 
-        for (TransferNode node : allActiveNodes) {
-            BlockPos targetPos = node.isWirelessRemote() ? node.getPos() : node.getPos().relative(node.getTargetSide());
-            ServerLevel targetLevel = (node.isWirelessRemote() && level.getServer() != null && node.getDimension() != null)
-                    ? level.getServer().getLevel(node.getDimension())
-                    : level;
-            if (targetLevel == null || !targetLevel.isLoaded(targetPos)) continue;
+            for (TransferNode node : allActiveNodes) {
+                BlockPos targetPos = node.isWirelessRemote() ? node.getPos() : node.getPos().relative(node.getTargetSide());
+                ServerLevel targetLevel = (node.isWirelessRemote() && level.getServer() != null && node.getDimension() != null)
+                        ? level.getServer().getLevel(node.getDimension())
+                        : level;
+                if (targetLevel == null || !targetLevel.isLoaded(targetPos)) continue;
 
-            BlockEntity be = targetLevel.getBlockEntity(targetPos);
+                BlockEntity be = targetLevel.getBlockEntity(targetPos);
 
-            if (node.isWirelessRemote() && (be == null || targetLevel.getBlockState(targetPos).isAir())) {
-                Containers.dropItemStack(
-                        targetLevel,
-                        targetPos.getX() + 0.5,
-                        targetPos.getY() + 0.5,
-                        targetPos.getZ() + 0.5,
-                        new ItemStack(ModItems.NETWORK_CARD.get())
-                );
-                UUPLogger.info(String.format("Wireless target block at %s was destroyed! Dropped reset Network Card and removed node.", targetPos.toShortString()));
-                if (brokenWirelessNodes == null) {
-                    brokenWirelessNodes = new ArrayList<>();
-                }
-                brokenWirelessNodes.add(node);
-                continue;
-            }
-
-            if (be == null || node.getMode() == TransferMode.DISABLED) continue;
-
-            handledPositions.add(targetPos);
-            Direction side = node.getTargetSide().getOpposite();
-            boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
-            int nodePriority = node.getPriority();
-
-            if (canInsert) {
-                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
-                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
-                collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
-
-                EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
-                GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
-            }
-        }
-
-        if (brokenWirelessNodes != null) {
-            configuredNodes.removeAll(brokenWirelessNodes);
-            networkDirty = true;
-        }
-
-        // Direct Controller Connections (Machine directly touching Controller)
-        for (BlockPos ctrlPos : foundControllers) {
-            if (!level.isLoaded(ctrlPos)) continue;
-
-            for (Direction dir : Direction.values()) {
-                BlockPos neighborPos = ctrlPos.relative(dir);
-                if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos) || handledPositions.contains(neighborPos)) {
+                if (node.isWirelessRemote() && (be == null || targetLevel.getBlockState(targetPos).isAir())) {
+                    Containers.dropItemStack(
+                            targetLevel,
+                            targetPos.getX() + 0.5,
+                            targetPos.getY() + 0.5,
+                            targetPos.getZ() + 0.5,
+                            new ItemStack(ModItems.NETWORK_CARD.get())
+                    );
+                    UUPLogger.info(String.format("Wireless target block at %s was destroyed! Dropped reset Network Card and removed node.", targetPos.toShortString()));
+                    if (brokenWirelessNodes == null) {
+                        brokenWirelessNodes = new ArrayList<>();
+                    }
+                    brokenWirelessNodes.add(node);
                     continue;
                 }
-                if (!level.isLoaded(neighborPos)) continue;
 
-                BlockEntity be = level.getBlockEntity(neighborPos);
-                if (be == null) continue;
+                if (be == null || node.getMode() == TransferMode.DISABLED) continue;
 
-                Direction side = dir.getOpposite();
+                handledPositions.add(targetPos);
+                Direction side = node.getTargetSide().getOpposite();
+                boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
+                int nodePriority = node.getPriority();
 
-                collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
-                collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
-                collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers);
+                if (canInsert) {
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, sharedTrashItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
 
-                EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
-                GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                    EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                    GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                }
             }
+
+            if (brokenWirelessNodes != null) {
+                configuredNodes.removeAll(brokenWirelessNodes);
+                networkDirty = true;
+                injectorsDirty = true;
+            }
+
+            // Direct Controller Connections (Machine directly touching Controller)
+            for (BlockPos ctrlPos : foundControllers) {
+                if (!level.isLoaded(ctrlPos)) continue;
+
+                for (Direction dir : Direction.values()) {
+                    BlockPos neighborPos = ctrlPos.relative(dir);
+                    if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos) || handledPositions.contains(neighborPos)) {
+                        continue;
+                    }
+                    if (!level.isLoaded(neighborPos)) continue;
+
+                    BlockEntity be = level.getBlockEntity(neighborPos);
+                    if (be == null) continue;
+
+                    Direction side = dir.getOpposite();
+
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, sharedTrashItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+
+                    EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                    GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                }
+            }
+
+            // Sort storage injectors once per tick: Priority descending, then distance from origin ascending (Nearest-First)
+            sortStorageInjectors(sharedStorageItemInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
+            sortStorageInjectors(sharedStorageFluidInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
+            sortStorageInjectors(sharedStorageEnergyInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
+
+            sharedAllItemInjectors.addAll(sharedStorageItemInjectors);
+            sharedAllItemInjectors.addAll(sharedMachineItemInjectors);
+
+            sharedAllFluidInjectors.addAll(sharedStorageFluidInjectors);
+            sharedAllFluidInjectors.addAll(sharedMachineFluidInjectors);
+
+            sharedAllEnergyInjectors.addAll(sharedStorageEnergyInjectors);
+            sharedAllEnergyInjectors.addAll(sharedMachineEnergyInjectors);
         }
-
-        // Sort storage injectors once per tick: Priority descending, then distance from origin ascending (Nearest-First)
-        sortStorageInjectors(sharedStorageItemInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
-        sortStorageInjectors(sharedStorageFluidInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
-        sortStorageInjectors(sharedStorageEnergyInjectors, originPos, sharedHandlerPositions, sharedHandlerPriorities);
-
-        sharedAllItemInjectors.addAll(sharedStorageItemInjectors);
-        sharedAllItemInjectors.addAll(sharedMachineItemInjectors);
-
-        sharedAllFluidInjectors.addAll(sharedStorageFluidInjectors);
-        sharedAllFluidInjectors.addAll(sharedMachineFluidInjectors);
-
-        sharedAllEnergyInjectors.addAll(sharedStorageEnergyInjectors);
-        sharedAllEnergyInjectors.addAll(sharedMachineEnergyInjectors);
 
         // Controller Internal Buffer Transfer (Dispatch to shared targets)
         if (!foundControllers.isEmpty()) {
@@ -514,21 +548,30 @@ public class NetworkController {
                     if (isSourceStorage) {
                         int maxStoragePriority = sharedStorageItemInjectors.isEmpty() ? Integer.MIN_VALUE 
                                 : sharedHandlerPriorities.getOrDefault(sharedStorageItemInjectors.get(0), 0);
-                        if (maxStoragePriority <= sourcePriority) {
-                            itemTargets = sharedMachineItemInjectors;
-                        } else {
-                            itemTargets = new ArrayList<>();
+                        itemTargets = new ArrayList<>();
+                        if (maxStoragePriority > sourcePriority) {
                             for (IItemHandler target : sharedStorageItemInjectors) {
+                                if (sharedTrashHandlers.contains(target)) continue; // Never void from input storage
                                 if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
                                     itemTargets.add(target);
                                 } else {
                                     break;
                                 }
                             }
-                            itemTargets.addAll(sharedMachineItemInjectors);
+                        }
+                        for (IItemHandler target : sharedMachineItemInjectors) {
+                            if (!sharedTrashHandlers.contains(target)) {
+                                itemTargets.add(target);
+                            }
                         }
                     } else {
-                        itemTargets = sharedAllItemInjectors;
+                        if (!sharedTrashItemInjectors.isEmpty()) {
+                            itemTargets = sharedTrashItemInjectors; // Directly void machine products without recycling into input chests!
+                        } else if (!sharedStorageItemInjectors.isEmpty()) {
+                            itemTargets = sharedStorageItemInjectors;
+                        } else {
+                            itemTargets = sharedAllItemInjectors;
+                        }
                     }
 
                     if (!itemTargets.isEmpty()) {
@@ -560,21 +603,30 @@ public class NetworkController {
                     if (isSourceStorage) {
                         int maxStoragePriority = sharedStorageFluidInjectors.isEmpty() ? Integer.MIN_VALUE 
                                 : sharedHandlerPriorities.getOrDefault(sharedStorageFluidInjectors.get(0), 0);
-                        if (maxStoragePriority <= sourcePriority) {
-                            fluidTargets = sharedMachineFluidInjectors;
-                        } else {
-                            fluidTargets = new ArrayList<>();
+                        fluidTargets = new ArrayList<>();
+                        if (maxStoragePriority > sourcePriority) {
                             for (IFluidHandler target : sharedStorageFluidInjectors) {
+                                if (sharedTrashHandlers.contains(target)) continue;
                                 if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
                                     fluidTargets.add(target);
                                 } else {
                                     break;
                                 }
                             }
-                            fluidTargets.addAll(sharedMachineFluidInjectors);
+                        }
+                        for (IFluidHandler target : sharedMachineFluidInjectors) {
+                            if (!sharedTrashHandlers.contains(target)) {
+                                fluidTargets.add(target);
+                            }
                         }
                     } else {
-                        fluidTargets = sharedAllFluidInjectors;
+                        if (!sharedTrashFluidInjectors.isEmpty()) {
+                            fluidTargets = sharedTrashFluidInjectors;
+                        } else if (!sharedStorageFluidInjectors.isEmpty()) {
+                            fluidTargets = sharedStorageFluidInjectors;
+                        } else {
+                            fluidTargets = sharedAllFluidInjectors;
+                        }
                     }
 
                     if (!fluidTargets.isEmpty()) {
@@ -688,9 +740,9 @@ public class NetworkController {
                     BlockEntity be = level.getBlockEntity(neighborPos);
                     if (be == null) continue;
                     Direction side = dir.getOpposite();
-                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, false, true, null, null, itemExtractors, null, null, null);
-                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, false, true, null, null, fluidExtractors, null, null, null);
-                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, false, true, null, null, energyExtractors, null, null, null);
+                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, false, true, null, null, null, itemExtractors, null, null, null, null);
+                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, false, true, null, null, null, fluidExtractors, null, null, null, null);
+                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, false, true, null, null, null, energyExtractors, null, null, null, null);
                     EnergyTransferExecutor.collectMekanismCapabilities(be, side, false, true, null, mekEnergyExtractors);
                     GasTransferExecutor.collectCapabilities(be, side, false, true, null, gasExtractors, null, infuseExtractors, null, pigmentExtractors, null, slurryExtractors);
                 }

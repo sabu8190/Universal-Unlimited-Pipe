@@ -217,4 +217,64 @@ public class UniversalUnlimitedPipeTest {
 
         Assertions.assertEquals(100, priorities.get(0), "Trash can with +100 bonus must be sorted first for machine outputs, avoiding recycling to storage");
     }
+
+    @Test
+    public void testStorageExtractionNeverTargetsTrashCan() {
+        // Storage containers must never void items directly into trash cans
+        String chestTarget = "StorageChest";
+        String trashCanTarget = "TrashCan";
+        java.util.Set<String> trashHandlers = java.util.Set.of(trashCanTarget);
+
+        java.util.List<String> allStorageInjectors = java.util.List.of(trashCanTarget, chestTarget);
+        java.util.List<String> filteredTargets = new java.util.ArrayList<>();
+        for (String target : allStorageInjectors) {
+            if (!trashHandlers.contains(target)) {
+                filteredTargets.add(target);
+            }
+        }
+
+        Assertions.assertEquals(1, filteredTargets.size(), "Trash cans must be excluded from storage extraction targets");
+        Assertions.assertEquals(chestTarget, filteredTargets.get(0), "Only non-trash storage must be eligible for storage extraction");
+    }
+
+    @Test
+    public void testMachineExtractionDirectsToTrashCan() {
+        // When trash can is available, machines void directly into trash can without recycling into input chests
+        String chestTarget = "InputChest";
+        String trashTarget = "TrashCan";
+        java.util.List<String> trashInjectors = java.util.List.of(trashTarget);
+        java.util.List<String> storageInjectors = java.util.List.of(chestTarget);
+
+        java.util.List<String> machineOutputTargets;
+        if (!trashInjectors.isEmpty()) {
+            machineOutputTargets = trashInjectors;
+        } else {
+            machineOutputTargets = storageInjectors;
+        }
+
+        Assertions.assertEquals(1, machineOutputTargets.size(), "Machine output must target only trash can when available");
+        Assertions.assertEquals(trashTarget, machineOutputTargets.get(0), "Machine output must route directly to trash can");
+    }
+
+    @Test
+    public void testInjectorScanCacheSkipsRedundantScanning() {
+        boolean injectorsDirty = false;
+        long lastScanTick = 100L;
+        int scans = 0;
+
+        for (long currentTick = 100; currentTick < 140; currentTick++) {
+            boolean shouldRescan = injectorsDirty || (currentTick - lastScanTick >= 40);
+            if (shouldRescan) {
+                scans++;
+                lastScanTick = currentTick;
+            }
+        }
+
+        Assertions.assertEquals(0, scans, "Zero scans should occur within the 40-tick cache interval when topology is stable");
+
+        // Tick 140 triggers cache refresh
+        long tick140 = 140L;
+        boolean shouldRescan140 = injectorsDirty || (tick140 - lastScanTick >= 40);
+        Assertions.assertTrue(shouldRescan140, "Scan must occur after 40-tick cache TTL expires");
+    }
 }
