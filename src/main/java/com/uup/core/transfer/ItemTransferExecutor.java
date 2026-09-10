@@ -350,9 +350,9 @@ public class ItemTransferExecutor {
             ItemKey itemKey = ItemKey.of(inSlot);
 
             // [Fast Path 1: O(1) Direct Active Target Routing]
-            // If an active target is known and not rejected this tick, route directly with ZERO target list traversal!
+            // If an active target is known, valid for current targets, and not rejected this tick, route directly with ZERO target list traversal!
             IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
-            if (activeTarget != null && activeTarget != sourceHandler) {
+            if (activeTarget != null && activeTarget != sourceHandler && targetHandlers.contains(activeTarget)) {
                 Set<ItemKey> rejected = rejectedMap.get(activeTarget);
                 if (rejected == null || !rejected.contains(itemKey)) {
                     int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);

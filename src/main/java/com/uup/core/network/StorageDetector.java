@@ -51,7 +51,20 @@ public class StorageDetector {
                 || className.contains("centrifuge")
                 || className.contains("reactor")
                 || className.contains("furnace")
-                || className.contains("turbine")) {
+                || className.contains("turbine")
+                || className.contains("miner")
+                || className.contains("pump")
+                || className.contains("quarry")
+                || className.contains("assembler")
+                || className.contains("press")
+                || className.contains("infuser")
+                || className.contains("separator")
+                || className.contains("combiner")
+                || className.contains("crystallizer")
+                || className.contains("dissolution")
+                || className.contains("washer")
+                || className.contains("condensentrator")
+                || className.contains("collector")) {
             return false;
         }
 

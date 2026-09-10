@@ -496,25 +496,50 @@ public class NetworkController {
             Direction side = dir.getOpposite();
             int nodeOverclocks = pipe.getUpgradeHandler(dir).getStackInSlot(0).getCount();
             int effectiveOverclocks = Math.max(this.overclockCount, nodeOverclocks);
+            int sourcePriority = pipe.getPriority(dir);
+            boolean isSourceStorage = StorageDetector.isStorage(neighborBE);
 
             // 1. アイテム分散搬出
             if (!sharedAllItemInjectors.isEmpty()) {
                 var itemOpt = neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, side);
                 IItemHandler itemHandler = itemOpt.isPresent() ? itemOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
                 if (itemHandler != null && !tickReceivedItemHandlers.contains(itemHandler)) {
-                    sharedHandlerPositions.putIfAbsent(itemHandler, neighborPos);
-                    ItemTransferExecutor.executeTransfer(
-                            itemHandler,
-                            sharedAllItemInjectors,
-                            effectiveOverclocks,
-                            neighborPos.toShortString(),
-                            "Network_Target",
-                            tickItemRejectedMap,
-                            tickReceivedItemHandlers,
-                            0L,
-                            null,
-                            sharedHandlerPositions
-                    );
+                    List<IItemHandler> itemTargets;
+                    if (isSourceStorage) {
+                        int maxStoragePriority = sharedStorageItemInjectors.isEmpty() ? Integer.MIN_VALUE 
+                                : sharedHandlerPriorities.getOrDefault(sharedStorageItemInjectors.get(0), 0);
+                        if (maxStoragePriority <= sourcePriority) {
+                            itemTargets = sharedMachineItemInjectors;
+                        } else {
+                            itemTargets = new ArrayList<>();
+                            for (IItemHandler target : sharedStorageItemInjectors) {
+                                if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
+                                    itemTargets.add(target);
+                                } else {
+                                    break;
+                                }
+                            }
+                            itemTargets.addAll(sharedMachineItemInjectors);
+                        }
+                    } else {
+                        itemTargets = sharedAllItemInjectors;
+                    }
+
+                    if (!itemTargets.isEmpty()) {
+                        sharedHandlerPositions.putIfAbsent(itemHandler, neighborPos);
+                        ItemTransferExecutor.executeTransfer(
+                                itemHandler,
+                                itemTargets,
+                                effectiveOverclocks,
+                                neighborPos.toShortString(),
+                                "Network_Target",
+                                tickItemRejectedMap,
+                                tickReceivedItemHandlers,
+                                0L,
+                                null,
+                                sharedHandlerPositions
+                        );
+                    }
                 }
             }
 
@@ -523,18 +548,41 @@ public class NetworkController {
                 var fluidOpt = neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, side);
                 IFluidHandler fluidHandler = fluidOpt.isPresent() ? fluidOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, null).orElse(null);
                 if (fluidHandler != null && !tickReceivedFluidHandlers.contains(fluidHandler)) {
-                    sharedHandlerPositions.putIfAbsent(fluidHandler, neighborPos);
-                    FluidTransferExecutor.executeTransfer(
-                            fluidHandler,
-                            sharedAllFluidInjectors,
-                            effectiveOverclocks,
-                            neighborPos.toShortString(),
-                            "Network_Fluid_Target",
-                            tickFluidRejectedMap,
-                            tickReceivedFluidHandlers,
-                            0L,
-                            null
-                    );
+                    List<IFluidHandler> fluidTargets;
+                    if (isSourceStorage) {
+                        int maxStoragePriority = sharedStorageFluidInjectors.isEmpty() ? Integer.MIN_VALUE 
+                                : sharedHandlerPriorities.getOrDefault(sharedStorageFluidInjectors.get(0), 0);
+                        if (maxStoragePriority <= sourcePriority) {
+                            fluidTargets = sharedMachineFluidInjectors;
+                        } else {
+                            fluidTargets = new ArrayList<>();
+                            for (IFluidHandler target : sharedStorageFluidInjectors) {
+                                if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
+                                    fluidTargets.add(target);
+                                } else {
+                                    break;
+                                }
+                            }
+                            fluidTargets.addAll(sharedMachineFluidInjectors);
+                        }
+                    } else {
+                        fluidTargets = sharedAllFluidInjectors;
+                    }
+
+                    if (!fluidTargets.isEmpty()) {
+                        sharedHandlerPositions.putIfAbsent(fluidHandler, neighborPos);
+                        FluidTransferExecutor.executeTransfer(
+                                fluidHandler,
+                                fluidTargets,
+                                effectiveOverclocks,
+                                neighborPos.toShortString(),
+                                "Network_Fluid_Target",
+                                tickFluidRejectedMap,
+                                tickReceivedFluidHandlers,
+                                0L,
+                                null
+                        );
+                    }
                 }
             }
 
@@ -543,17 +591,40 @@ public class NetworkController {
                 var energyOpt = neighborBE.getCapability(ForgeCapabilities.ENERGY, side);
                 IEnergyStorage energyHandler = energyOpt.isPresent() ? energyOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.ENERGY, null).orElse(null);
                 if (energyHandler != null && !tickReceivedEnergyHandlers.contains(energyHandler)) {
-                    sharedHandlerPositions.putIfAbsent(energyHandler, neighborPos);
-                    EnergyTransferExecutor.executeTransfer(
-                            energyHandler,
-                            sharedAllEnergyInjectors,
-                            effectiveOverclocks,
-                            neighborPos.toShortString(),
-                            "Network_Energy_Target",
-                            tickReceivedEnergyHandlers,
-                            0L,
-                            null
-                    );
+                    List<IEnergyStorage> energyTargets;
+                    if (isSourceStorage) {
+                        int maxStoragePriority = sharedStorageEnergyInjectors.isEmpty() ? Integer.MIN_VALUE 
+                                : sharedHandlerPriorities.getOrDefault(sharedStorageEnergyInjectors.get(0), 0);
+                        if (maxStoragePriority <= sourcePriority) {
+                            energyTargets = sharedMachineEnergyInjectors;
+                        } else {
+                            energyTargets = new ArrayList<>();
+                            for (IEnergyStorage target : sharedStorageEnergyInjectors) {
+                                if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
+                                    energyTargets.add(target);
+                                } else {
+                                    break;
+                                }
+                            }
+                            energyTargets.addAll(sharedMachineEnergyInjectors);
+                        }
+                    } else {
+                        energyTargets = sharedAllEnergyInjectors;
+                    }
+
+                    if (!energyTargets.isEmpty()) {
+                        sharedHandlerPositions.putIfAbsent(energyHandler, neighborPos);
+                        EnergyTransferExecutor.executeTransfer(
+                                energyHandler,
+                                energyTargets,
+                                effectiveOverclocks,
+                                neighborPos.toShortString(),
+                                "Network_Energy_Target",
+                                tickReceivedEnergyHandlers,
+                                0L,
+                                null
+                        );
+                    }
                 }
             }
 
