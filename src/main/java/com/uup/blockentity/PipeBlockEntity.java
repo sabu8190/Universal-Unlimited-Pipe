@@ -60,23 +60,36 @@ public class PipeBlockEntity extends BlockEntity {
     }
 
     private NetworkController masterController = null;
-    private boolean hasAdjacentInventory = true;
-    private long lastInventoryCheckTick = -1;
+    private Boolean hasAdjacentInventoryCached = null;
 
     public void invalidateInventoryCache() {
-        this.hasAdjacentInventory = true;
-        this.lastInventoryCheckTick = -1;
+        this.hasAdjacentInventoryCached = null;
     }
 
     public boolean hasAdjacentInventory() {
-        return this.hasAdjacentInventory;
+        if (hasAdjacentInventoryCached == null) {
+            if (level == null) return true;
+            hasAdjacentInventoryCached = checkAdjacentInventoryPhysically(level, worldPosition);
+        }
+        return hasAdjacentInventoryCached;
+    }
+
+    private static boolean checkAdjacentInventoryPhysically(Level level, BlockPos pos) {
+        for (Direction dir : Direction.values()) {
+            BlockPos neighbor = pos.relative(dir);
+            if (!level.hasChunkAt(neighbor)) continue;
+            BlockState state = level.getBlockState(neighbor);
+            if (state.isAir() || state.getBlock() instanceof com.uup.block.PipeBlock) continue;
+            if (state.is(com.uup.setup.ModBlocks.CONTROLLER.get()) || state.is(com.uup.setup.ModBlocks.NODE.get())) return true;
+            if (level.getBlockEntity(neighbor) != null) return true;
+        }
+        return false;
     }
 
     public void markNetworkDirty() {
         standaloneNetwork.markNetworkDirty();
         this.masterController = null;
-        this.hasAdjacentInventory = true;
-        this.lastInventoryCheckTick = -1;
+        this.hasAdjacentInventoryCached = null;
     }
 
     public void syncStandaloneMaster(NetworkController controller, BlockPos lowestPos, java.util.Set<BlockPos> controllers) {
@@ -97,21 +110,10 @@ public class PipeBlockEntity extends BlockEntity {
 
         // 2. 全パイプ共通：自分自身の隣接インベントリからの搬出を自身のTickで分散実行（負荷均等分散）！
         // 隣接外部インベントリがない中継パイプは 0 ナノ秒で完全スキップ！
-        long gameTime = level.getGameTime();
-        if (hasAdjacentInventory) {
+        if (hasAdjacentInventory()) {
             NetworkController controller = masterController != null ? masterController : (standaloneNetwork.isMasterPipe(worldPosition) ? standaloneNetwork : null);
             if (controller != null) {
-                boolean foundAny = controller.tickPipeExtract(level, this);
-                if (!foundAny && (gameTime - lastInventoryCheckTick > 20)) {
-                    this.hasAdjacentInventory = false;
-                    this.lastInventoryCheckTick = gameTime;
-                }
-            }
-        } else {
-            // 20 ticks (1秒) ごとに1度だけ隣接インベントリの有無を再確認
-            if (gameTime - lastInventoryCheckTick > 20) {
-                this.hasAdjacentInventory = true;
-                this.lastInventoryCheckTick = gameTime;
+                controller.tickPipeExtract(level, this);
             }
         }
     }

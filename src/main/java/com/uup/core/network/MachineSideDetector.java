@@ -31,6 +31,8 @@ public class MachineSideDetector {
     private record CacheKey(BlockEntity be, Direction side) {}
 
     private static final Map<CacheKey, SideAccess> SIDE_ACCESS_CACHE = new ConcurrentHashMap<>();
+    // Caches the minimum output slot index for a given machine side (e.g. processes count for Mekanism factories)
+    private static final Map<CacheKey, Integer> MIN_OUTPUT_SLOT_CACHE = new ConcurrentHashMap<>();
 
     private static boolean isMekanismLoaded() {
         try {
@@ -42,6 +44,7 @@ public class MachineSideDetector {
 
     public static void clearCache() {
         SIDE_ACCESS_CACHE.clear();
+        MIN_OUTPUT_SLOT_CACHE.clear();
     }
 
     /**
@@ -156,15 +159,28 @@ public class MachineSideDetector {
         if (be == null) return true;
         if (StorageDetector.isStorage(be)) return true; // General storage: all slots extractable
 
-        if (isMekanismLoaded() && MekanismHelper.isMekanismFactory(be)) {
-            return MekanismHelper.isFactoryOutputSlot(be, side, slotIndex, totalSlots);
+        CacheKey key = new CacheKey(be, side);
+        Integer minSlot = MIN_OUTPUT_SLOT_CACHE.get(key);
+        if (minSlot == null) {
+            minSlot = evaluateMinOutputSlot(be, side, totalSlots);
+            MIN_OUTPUT_SLOT_CACHE.put(key, minSlot);
         }
 
         if (be instanceof AbstractFurnaceBlockEntity) {
             return slotIndex == 2; // Slot 2 is output; slot 0 (input) and slot 1 (fuel) are never extracted
         }
 
-        return true;
+        return slotIndex >= minSlot;
+    }
+
+    private static int evaluateMinOutputSlot(BlockEntity be, Direction side, int totalSlots) {
+        if (isMekanismLoaded() && MekanismHelper.isMekanismFactory(be)) {
+            return MekanismHelper.getFactoryMinOutputSlot(be, side, totalSlots);
+        }
+        if (be instanceof AbstractFurnaceBlockEntity) {
+            return 2;
+        }
+        return 0;
     }
 
     /**
@@ -221,9 +237,9 @@ public class MachineSideDetector {
             return true;
         }
 
-        static boolean isFactoryOutputSlot(BlockEntity be, Direction side, int slotIndex, int totalSlots) {
+        static int getFactoryMinOutputSlot(BlockEntity be, Direction side, int totalSlots) {
             if (!(be instanceof mekanism.common.tile.factory.TileEntityFactory<?> factory)) {
-                return true;
+                return 0;
             }
             int processes = factory.tier.processes;
 
@@ -237,20 +253,20 @@ public class MachineSideDetector {
                     if (dt == mekanism.common.tile.component.config.DataType.OUTPUT
                             || dt == mekanism.common.tile.component.config.DataType.OUTPUT_1
                             || dt == mekanism.common.tile.component.config.DataType.OUTPUT_2) {
-                        return true; // Exclusively output slots exposed on this side
+                        return 0; // Exclusively output slots exposed on this side
                     }
                     if (dt == mekanism.common.tile.component.config.DataType.INPUT_OUTPUT) {
                         // Input slots are slots [0..processes-1], Output slots are slots [processes..2*processes-1]
-                        return slotIndex >= processes;
+                        return processes;
                     }
                 }
             }
 
             // Fallback for combined item handlers: output slots are placed after input slots
             if (totalSlots > processes) {
-                return slotIndex >= processes;
+                return processes;
             }
-            return true;
+            return 0;
         }
     }
 }

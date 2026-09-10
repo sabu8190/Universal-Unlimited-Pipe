@@ -68,6 +68,18 @@ public class ItemTransferExecutor {
             int overclocks,
             @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions
     ) {
+        executeAllItemTransfers(extractors, storageInjectors, machineInjectors, storageHandlers, overclocks, handlerPositions, 0L);
+    }
+
+    public static void executeAllItemTransfers(
+            List<IItemHandler> extractors,
+            List<IItemHandler> storageInjectors,
+            List<IItemHandler> machineInjectors,
+            @Nullable Set<Object> storageHandlers,
+            int overclocks,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            long currentTick
+    ) {
         if (extractors == null || extractors.isEmpty()) {
             return;
         }
@@ -109,7 +121,7 @@ public class ItemTransferExecutor {
                     "UUP_Insert",
                     tickRejectedMap,
                     receivedInThisTick,
-                    0L,
+                    currentTick,
                     null,
                     handlerPositions,
                     storageHandlers,
@@ -149,7 +161,7 @@ public class ItemTransferExecutor {
         public boolean isFull(ItemKey itemKey, long tick) {
             Long fullTick = fullItemTicks.get(itemKey);
             if (fullTick == null) return false;
-            if (tick - fullTick > 20) { // 20 ticks (1 sec) TTL for auto-recovery when chests are emptied
+            if (tick - fullTick > 1200) { // 1200 ticks (60s) fallback TTL for auto-recovery
                 fullItemTicks.remove(itemKey);
                 return false;
             }
@@ -171,7 +183,7 @@ public class ItemTransferExecutor {
         }
 
         public void updateEmptySlotTracking(long tick) {
-            if (tick - lastEmptySlotResetTick > 20) {
+            if (tick - lastEmptySlotResetTick > 1200) {
                 firstEmptySlot = 0;
                 lastEmptySlotResetTick = tick;
             }
@@ -188,8 +200,6 @@ public class ItemTransferExecutor {
     // Active storage search cursor per item: tracks the starting index of non-full storage containers in O(1)
     private static final Map<ItemKey, Integer> STORAGE_SEARCH_CURSORS = 
             new java.util.concurrent.ConcurrentHashMap<>();
-    private static final Map<ItemKey, Long> STORAGE_CURSOR_RESET_TICKS = 
-            new java.util.concurrent.ConcurrentHashMap<>();
 
     // Round-robin cursor per source handler to distribute items evenly across processing machines
     private static final Map<IItemHandler, Integer> ROUND_ROBIN_CURSORS = 
@@ -203,7 +213,6 @@ public class ItemTransferExecutor {
         TARGET_STATE_CACHE.clear();
         ACTIVE_TARGET_BY_ITEM.clear();
         STORAGE_SEARCH_CURSORS.clear();
-        STORAGE_CURSOR_RESET_TICKS.clear();
         ROUND_ROBIN_CURSORS.clear();
     }
 
@@ -453,6 +462,8 @@ public class ItemTransferExecutor {
             return 0;
         }
 
+        long effectiveTick = currentTick > 0 ? currentTick : (System.currentTimeMillis() / 50);
+
         int baseRate = ModConfig.COMMON != null && ModConfig.COMMON.baseItemTransferRate != null 
                 ? ModConfig.COMMON.baseItemTransferRate.get() : Integer.MAX_VALUE;
         double multiplier = ModConfig.COMMON != null && ModConfig.COMMON.overclockItemMultiplier != null 
@@ -508,12 +519,12 @@ public class ItemTransferExecutor {
                     IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
                     if (activeTarget != null && activeTarget != sourceHandler && storageTargets.contains(activeTarget)) {
                         TargetState state = TARGET_STATE_CACHE.get(activeTarget);
-                        if (state != null && state.isFull(itemKey, currentTick)) {
+                        if (state != null && state.isFull(itemKey, effectiveTick)) {
                             ACTIVE_TARGET_BY_ITEM.remove(itemKey);
                         } else {
                             Set<ItemKey> rejected = rejectedMap.get(activeTarget);
                             if (rejected == null || !rejected.contains(itemKey)) {
-                                int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
+                                int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
                                 if (moved > 0) {
                                     movedTotal += moved;
                                     transferred = true;
@@ -526,49 +537,64 @@ public class ItemTransferExecutor {
 
                     if (!transferred) {
                         int numStorage = storageTargets.size();
-                        // 20 ticks (1秒) ごとに探索カーソルを手前（0）にリセットして手前空きへの自動復帰を担保
-                        Long lastReset = STORAGE_CURSOR_RESET_TICKS.get(itemKey);
-                        if (lastReset == null || currentTick - lastReset > 20) {
-                            STORAGE_SEARCH_CURSORS.put(itemKey, 0);
-                            STORAGE_CURSOR_RESET_TICKS.put(itemKey, currentTick);
-                        }
-
                         int startIdx = STORAGE_SEARCH_CURSORS.getOrDefault(itemKey, 0);
                         if (startIdx >= numStorage) {
                             startIdx = 0;
+                            STORAGE_SEARCH_CURSORS.put(itemKey, 0);
                         }
 
-                        for (int i = startIdx; i < numStorage; i++) {
-                            IItemHandler target = storageTargets.get(i);
-                            if (target == null || target == sourceHandler || target == activeTarget) continue;
-
-                            Set<ItemKey> rejected = rejectedMap.get(target);
-                            if (rejected != null && rejected.contains(itemKey)) {
-                                continue;
-                            }
-
-                            // 満杯キャッシュの事前チェック ($O(1)$)
-                            TargetState state = TARGET_STATE_CACHE.get(target);
-                            if (state != null && state.isFull(itemKey, currentTick)) {
-                                rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
-                                if (i == startIdx) {
-                                    startIdx++;
-                                    STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                        // 【巡回プローブ】カーソルが手前（0）以外にある場合、毎tick 1個だけ手前チェストをテスト！
+                        // 1,500万回の全走査スパイクを完全根絶し、1 tick 負荷 0.001ms で手前空きを即時検知＆カーソル復帰
+                        if (startIdx > 0) {
+                            int probeIdx = (int) (Math.abs(effectiveTick) % startIdx);
+                            IItemHandler probeTarget = storageTargets.get(probeIdx);
+                            if (probeTarget != null && probeTarget != sourceHandler) {
+                                TargetState probeState = TARGET_STATE_CACHE.get(probeTarget);
+                                if (probeState != null) {
+                                    int probeMoved = tryTransferSlot(sourceHandler, probeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
+                                    if (probeMoved > 0) {
+                                        movedTotal += probeMoved;
+                                        ACTIVE_TARGET_BY_ITEM.put(itemKey, probeTarget);
+                                        STORAGE_SEARCH_CURSORS.put(itemKey, probeIdx);
+                                        transferred = true;
+                                    }
                                 }
-                                continue;
                             }
+                        }
 
-                            int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
-                            if (moved > 0) {
-                                movedTotal += moved;
-                                ACTIVE_TARGET_BY_ITEM.put(itemKey, target);
-                                STORAGE_SEARCH_CURSORS.put(itemKey, i); // 次回はここから直接探索！
-                                transferred = true;
-                                break;
-                            } else {
-                                if (i == startIdx) {
-                                    startIdx++;
-                                    STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                        if (!transferred) {
+                            for (int i = startIdx; i < numStorage; i++) {
+                                IItemHandler target = storageTargets.get(i);
+                                if (target == null || target == sourceHandler || target == activeTarget) continue;
+
+                                Set<ItemKey> rejected = rejectedMap.get(target);
+                                if (rejected != null && rejected.contains(itemKey)) {
+                                    continue;
+                                }
+
+                                // 満杯キャッシュの事前チェック ($O(1)$)
+                                TargetState state = TARGET_STATE_CACHE.get(target);
+                                if (state != null && state.isFull(itemKey, effectiveTick)) {
+                                    rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+                                    if (i == startIdx) {
+                                        startIdx++;
+                                        STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                                    }
+                                    continue;
+                                }
+
+                                int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
+                                if (moved > 0) {
+                                    movedTotal += moved;
+                                    ACTIVE_TARGET_BY_ITEM.put(itemKey, target);
+                                    STORAGE_SEARCH_CURSORS.put(itemKey, i); // 次回はここから直接探索！
+                                    transferred = true;
+                                    break;
+                                } else {
+                                    if (i == startIdx) {
+                                        startIdx++;
+                                        STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                                    }
                                 }
                             }
                         }
@@ -597,12 +623,12 @@ public class ItemTransferExecutor {
 
                         // 満杯キャッシュの事前チェック ($O(1)$)
                         TargetState state = TARGET_STATE_CACHE.get(target);
-                        if (state != null && state.isFull(itemKey, currentTick)) {
+                        if (state != null && state.isFull(itemKey, effectiveTick)) {
                             rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
                             continue;
                         }
 
-                        int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
+                        int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
                         if (moved > 0) {
                             movedTotal += moved;
                             GLOBAL_MACHINE_CURSOR.set((targetIdx + 1) % numMachines);

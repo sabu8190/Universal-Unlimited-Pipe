@@ -261,10 +261,10 @@ public class UniversalUnlimitedPipeTest {
 
         // Mark full at tick 100
         state.markFull(testKey, 100L);
-        Assertions.assertTrue(state.isFull(testKey, 105L), "Item must remain marked full within 20-tick TTL");
+        Assertions.assertTrue(state.isFull(testKey, 105L), "Item must remain marked full within TTL");
 
-        // After 21 ticks (tick 121), TTL expires and item can be inserted again (e.g. user emptied chest)
-        Assertions.assertFalse(state.isFull(testKey, 121L), "Item full state must expire after 20 ticks for auto-recovery");
+        // After 1201 ticks (tick 1301), TTL expires for fallback auto-recovery
+        Assertions.assertFalse(state.isFull(testKey, 1301L), "Item full state must expire after 1200 ticks for fallback auto-recovery");
     }
 
     @Test

@@ -447,11 +447,13 @@ public class NetworkController {
 
                 if (canInsert) {
                     collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, nodePriority, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, sharedTrashItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
-                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
-                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    if (!StorageDetector.isItemStorageOnly(be)) {
+                        collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, nodePriority, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                        collectForgeCap(be, ForgeCapabilities.ENERGY, side, nodePriority, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
 
-                    EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
-                    GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                        EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                        GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                    }
                 }
             }
 

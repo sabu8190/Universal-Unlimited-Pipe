@@ -30,6 +30,29 @@ public class StorageDetector {
         return result;
     }
 
+    private static final Map<Class<?>, Boolean> ITEM_STORAGE_ONLY_CACHE = new ConcurrentHashMap<>();
+
+    public static boolean isItemStorageOnly(BlockEntity be) {
+        if (be == null) return false;
+        Class<?> clazz = be.getClass();
+        Boolean cached = ITEM_STORAGE_ONLY_CACHE.get(clazz);
+        if (cached != null) {
+            return cached;
+        }
+
+        boolean result = evaluateIsItemStorageOnly(be);
+        ITEM_STORAGE_ONLY_CACHE.put(clazz, result);
+        return result;
+    }
+
+    private static boolean evaluateIsItemStorageOnly(BlockEntity be) {
+        if (isTrashCan(be)) return false;
+        if (!isStorage(be)) return false;
+        String name = be.getClass().getName().toLowerCase(Locale.ROOT);
+        return !name.contains("tank") && !name.contains("drum") && !name.contains("battery") 
+                && !name.contains("capacitor") && !name.contains("energy") && !name.contains("fluid");
+    }
+
     private static boolean evaluateIsStorage(BlockEntity be) {
         // 1. Explicit processing machines / furnaces to exclude
         if (be instanceof AbstractFurnaceBlockEntity
