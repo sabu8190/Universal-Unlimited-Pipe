@@ -537,7 +537,8 @@ public class NetworkController {
                                 tickReceivedItemHandlers,
                                 0L,
                                 null,
-                                sharedHandlerPositions
+                                sharedHandlerPositions,
+                                sharedStorageHandlers
                         );
                     }
                 }

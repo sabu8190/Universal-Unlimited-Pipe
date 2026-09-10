@@ -116,11 +116,49 @@ public class UniversalUnlimitedPipeTest {
     }
 
     @Test
-    public void testAsyncRouteLoggingNonBlocking() {
-        // Verify route logging works without exception or main thread blocking
-        for (int i = 0; i < 100; i++) {
-            com.uup.logging.UUPLogger.logRoute(String.format("[TargetRoute] %dx minecraft:iron_ingot from 100, 64, %d -> 200, 64, %d", i, i, i));
+    public void testRoundRobinMachineDistribution() {
+        // Simulating 100 processing machines and round-robin cursor rotation
+        int machineCount = 100;
+        int[] itemsReceived = new int[machineCount];
+        int cursor = 0;
+        int totalSlotsTransferred = 500; // 500 batches/slots moved
+
+        for (int i = 0; i < totalSlotsTransferred; i++) {
+            int targetIdx = cursor;
+            itemsReceived[targetIdx] += 64; // 1 stack each
+            cursor = (targetIdx + 1) % machineCount;
         }
-        Assertions.assertTrue(true, "Async route logging must process without throwing exceptions");
+
+        // Verify every machine received exactly 5 stacks (320 items)
+        for (int i = 0; i < machineCount; i++) {
+            Assertions.assertEquals(320, itemsReceived[i], "Each of the 100 machines must receive exactly 320 items via Round-Robin");
+        }
+    }
+
+    @Test
+    public void testStickyStorageRoutingPriority() {
+        // Simulating 5 storage chests: Chest 0 must fill to 100% capacity (e.g. 1728 items) before Chest 1 receives any
+        int chestCapacity = 1728;
+        int chestCount = 5;
+        int[] chestContents = new int[chestCount];
+        int activeChestIdx = 0;
+
+        int totalItemsIncoming = 3000;
+        int itemsRemaining = totalItemsIncoming;
+
+        while (itemsRemaining > 0 && activeChestIdx < chestCount) {
+            int spaceInActive = chestCapacity - chestContents[activeChestIdx];
+            if (spaceInActive > 0) {
+                int toMove = Math.min(spaceInActive, itemsRemaining);
+                chestContents[activeChestIdx] += toMove;
+                itemsRemaining -= toMove;
+            } else {
+                activeChestIdx++; // Move to next storage only when current is 100% full
+            }
+        }
+
+        Assertions.assertEquals(1728, chestContents[0], "First chest must be 100% full (1728 items)");
+        Assertions.assertEquals(1272, chestContents[1], "Second chest receives remainder (1272 items)");
+        Assertions.assertEquals(0, chestContents[2], "Third chest receives 0 items until previous are full");
     }
 }

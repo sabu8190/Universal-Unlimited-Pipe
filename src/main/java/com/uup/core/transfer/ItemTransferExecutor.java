@@ -110,7 +110,8 @@ public class ItemTransferExecutor {
                     receivedInThisTick,
                     0L,
                     null,
-                    handlerPositions
+                    handlerPositions,
+                    storageHandlers
             );
         }
     }
@@ -146,8 +147,12 @@ public class ItemTransferExecutor {
     private static final Map<IItemHandler, TargetState> TARGET_STATE_CACHE = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
-    // Active nearest target cache: routes items directly to the active filling container in O(1)
+    // Active nearest target cache: routes items directly to the active filling container in O(1) (for Storage)
     private static final Map<ItemKey, IItemHandler> ACTIVE_TARGET_BY_ITEM = 
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    // Round-robin cursor per source handler to distribute items evenly across processing machines
+    private static final Map<IItemHandler, Integer> ROUND_ROBIN_CURSORS = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
     // Cache max stack size per item to prevent BiggerStacks mod's heavy Thread.getStackTrace() overhead
@@ -325,6 +330,22 @@ public class ItemTransferExecutor {
             @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache,
             @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions
     ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, currentTick, persistentCache, handlerPositions, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            @Nullable Set<Object> storageHandlers
+    ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
@@ -343,43 +364,97 @@ public class ItemTransferExecutor {
         Map<IItemHandler, Set<ItemKey>> rejectedMap = sharedRejectedMap != null 
                 ? sharedRejectedMap : new IdentityHashMap<>();
 
-        for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
-            ItemStack inSlot = sourceHandler.getStackInSlot(slot);
-            if (inSlot.isEmpty()) continue;
+        // Partition targetHandlers into storage vs machine targets
+        List<IItemHandler> storageTargets = null;
+        List<IItemHandler> machineTargets = null;
 
-            ItemKey itemKey = ItemKey.of(inSlot);
-
-            // [Fast Path 1: O(1) Direct Active Target Routing]
-            // If an active target is known, valid for current targets, and not rejected this tick, route directly with ZERO target list traversal!
-            IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
-            if (activeTarget != null && activeTarget != sourceHandler && targetHandlers.contains(activeTarget)) {
-                Set<ItemKey> rejected = rejectedMap.get(activeTarget);
-                if (rejected == null || !rejected.contains(itemKey)) {
-                    int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
-                    if (moved > 0) {
-                        movedTotal += moved;
-                        continue; // Success in O(1)! Completely bypass dozens of target scans.
-                    } else {
-                        ACTIVE_TARGET_BY_ITEM.remove(itemKey);
-                    }
+        if (storageHandlers != null) {
+            for (IItemHandler target : targetHandlers) {
+                if (target == null || target == sourceHandler) continue;
+                if (storageHandlers.contains(target)) {
+                    if (storageTargets == null) storageTargets = new ArrayList<>();
+                    storageTargets.add(target);
+                } else {
+                    if (machineTargets == null) machineTargets = new ArrayList<>();
+                    machineTargets.add(target);
                 }
             }
+        } else {
+            storageTargets = targetHandlers;
+        }
 
-            // [Fallback: Direct indexed scan (0 allocation) to find next available target]
-            int numTargets = targetHandlers.size();
-            for (int i = 0; i < numTargets && movedTotal < maxToMove; i++) {
-                IItemHandler target = targetHandlers.get(i);
-                if (target == null || target == sourceHandler || target == activeTarget) continue;
+        int numMachines = machineTargets != null ? machineTargets.size() : 0;
+        int rrCursor = numMachines > 0 ? ROUND_ROBIN_CURSORS.getOrDefault(sourceHandler, 0) : 0;
+        if (rrCursor >= numMachines) rrCursor = 0;
 
-                Set<ItemKey> rejected = rejectedMap.get(target);
-                if (rejected != null && rejected.contains(itemKey)) {
-                    continue;
+        for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
+            while (movedTotal < maxToMove) {
+                ItemStack inSlot = sourceHandler.getStackInSlot(slot);
+                if (inSlot.isEmpty()) break;
+
+                ItemKey itemKey = ItemKey.of(inSlot);
+                boolean transferred = false;
+
+                // 1. Storage ターゲットへの搬入 (Sticky Nearest-First)
+                if (storageTargets != null && !storageTargets.isEmpty()) {
+                    IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
+                    if (activeTarget != null && activeTarget != sourceHandler && storageTargets.contains(activeTarget)) {
+                        Set<ItemKey> rejected = rejectedMap.get(activeTarget);
+                        if (rejected == null || !rejected.contains(itemKey)) {
+                            int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                            if (moved > 0) {
+                                movedTotal += moved;
+                                transferred = true;
+                            } else {
+                                ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                            }
+                        }
+                    }
+
+                    if (!transferred) {
+                        for (IItemHandler target : storageTargets) {
+                            if (target == null || target == sourceHandler || target == activeTarget) continue;
+
+                            Set<ItemKey> rejected = rejectedMap.get(target);
+                            if (rejected != null && rejected.contains(itemKey)) {
+                                continue;
+                            }
+
+                            int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                            if (moved > 0) {
+                                movedTotal += moved;
+                                ACTIVE_TARGET_BY_ITEM.put(itemKey, target);
+                                transferred = true;
+                                break;
+                            }
+                        }
+                    }
                 }
 
-                int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
-                if (moved > 0) {
-                    movedTotal += moved;
-                    ACTIVE_TARGET_BY_ITEM.put(itemKey, target); // Directly route subsequent items here in O(1)
+                // 2. Storage に入らなかった場合、Machine ターゲットへの均等分配 (Round-Robin)
+                if (!transferred && numMachines > 0) {
+                    for (int offset = 0; offset < numMachines && movedTotal < maxToMove; offset++) {
+                        int targetIdx = (rrCursor + offset) % numMachines;
+                        IItemHandler target = machineTargets.get(targetIdx);
+                        if (target == null || target == sourceHandler) continue;
+
+                        Set<ItemKey> rejected = rejectedMap.get(target);
+                        if (rejected != null && rejected.contains(itemKey)) {
+                            continue;
+                        }
+
+                        int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                        if (moved > 0) {
+                            movedTotal += moved;
+                            rrCursor = (targetIdx + 1) % numMachines;
+                            ROUND_ROBIN_CURSORS.put(sourceHandler, rrCursor);
+                            transferred = true;
+                            break; // 次のマシンへ分散投入
+                        }
+                    }
+                }
+
+                if (!transferred) {
                     break;
                 }
             }
