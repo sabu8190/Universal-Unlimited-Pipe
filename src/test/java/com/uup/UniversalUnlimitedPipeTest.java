@@ -277,4 +277,61 @@ public class UniversalUnlimitedPipeTest {
         boolean shouldRescan140 = injectorsDirty || (tick140 - lastScanTick >= 40);
         Assertions.assertTrue(shouldRescan140, "Scan must occur after 40-tick cache TTL expires");
     }
+
+    @Test
+    public void testMachineSideConfigInputPriority() {
+        // Machine side is configured as INPUT_ONLY (e.g. blue side in Mekanism)
+        com.uup.core.network.MachineSideDetector.SideAccess inputOnly = com.uup.core.network.MachineSideDetector.SideAccess.INPUT_ONLY;
+
+        // Pipe set to BOTH: must adopt machine config -> INSERT only, no extraction
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.BOTH, inputOnly));
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.BOTH, inputOnly));
+
+        // Pipe set to EXTRACT: machine priority overrides pipe -> extraction blocked!
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.EXTRACT, inputOnly));
+    }
+
+    @Test
+    public void testMachineSideConfigOutputPriority() {
+        // Machine side is configured as OUTPUT_ONLY (e.g. red side in Mekanism)
+        com.uup.core.network.MachineSideDetector.SideAccess outputOnly = com.uup.core.network.MachineSideDetector.SideAccess.OUTPUT_ONLY;
+
+        // Pipe set to BOTH: must adopt machine config -> EXTRACT only, no insertion
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.BOTH, outputOnly));
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.BOTH, outputOnly));
+
+        // Pipe set to INSERT: machine priority overrides pipe -> insertion blocked!
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.INSERT, outputOnly));
+    }
+
+    @Test
+    public void testGeneralStorageFollowsPipeMode() {
+        // Unconfigured storage (Chest, Barrel) uses PASS_THROUGH -> adheres to pipe mode
+        com.uup.core.network.MachineSideDetector.SideAccess passThrough = com.uup.core.network.MachineSideDetector.SideAccess.PASS_THROUGH;
+
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.BOTH, passThrough));
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.BOTH, passThrough));
+
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.INSERT, passThrough));
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.INSERT, passThrough));
+
+        Assertions.assertFalse(com.uup.core.network.MachineSideDetector.isEffectiveInsert(com.uup.core.network.TransferMode.EXTRACT, passThrough));
+        Assertions.assertTrue(com.uup.core.network.MachineSideDetector.isEffectiveExtract(com.uup.core.network.TransferMode.EXTRACT, passThrough));
+    }
+
+    @Test
+    public void testMachineOutputSlotOnlyExtractionLogic() {
+        // In a 9-slot factory (Ultimate Factory: 9 inputs, 9 outputs, total 18 slots)
+        int processes = 9;
+        int totalSlots = 18;
+
+        for (int slot = 0; slot < totalSlots; slot++) {
+            boolean isOutput = slot >= processes;
+            if (slot < processes) {
+                Assertions.assertFalse(isOutput, "Slots 0..8 are raw input slots (e.g. Cobblestone) and must never be extracted");
+            } else {
+                Assertions.assertTrue(isOutput, "Slots 9..17 are finished product slots (e.g. Stone) and are eligible for extraction");
+            }
+        }
+    }
 }

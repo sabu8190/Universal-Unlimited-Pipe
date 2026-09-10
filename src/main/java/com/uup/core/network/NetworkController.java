@@ -108,6 +108,7 @@ public class NetworkController {
     public void markNetworkDirty() {
         this.networkDirty = true;
         this.injectorsDirty = true;
+        MachineSideDetector.clearCache();
     }
 
     public boolean hasController() {
@@ -158,6 +159,7 @@ public class NetworkController {
         energyRejectionCache.clear();
         lowestPipePos = null;
         this.injectorsDirty = true;
+        MachineSideDetector.clearCache();
 
         Queue<BlockPos> queue = new ArrayDeque<>();
         Set<BlockPos> visited = new HashSet<>();
@@ -437,7 +439,8 @@ public class NetworkController {
 
                 handledPositions.add(targetPos);
                 Direction side = node.getTargetSide().getOpposite();
-                boolean canInsert = node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH;
+                MachineSideDetector.SideAccess access = MachineSideDetector.getSideAccess(be, side);
+                boolean canInsert = MachineSideDetector.isEffectiveInsert(node.getMode(), access);
                 int nodePriority = node.getPriority();
 
                 if (canInsert) {
@@ -471,13 +474,17 @@ public class NetworkController {
                     if (be == null) continue;
 
                     Direction side = dir.getOpposite();
+                    MachineSideDetector.SideAccess access = MachineSideDetector.getSideAccess(be, side);
+                    boolean canInsert = MachineSideDetector.isEffectiveInsert(TransferMode.BOTH, access);
 
-                    collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, sharedTrashItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
-                    collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
-                    collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                    if (canInsert) {
+                        collectForgeCap(be, ForgeCapabilities.ITEM_HANDLER, side, 0, true, false, sharedStorageItemInjectors, sharedMachineItemInjectors, sharedTrashItemInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                        collectForgeCap(be, ForgeCapabilities.FLUID_HANDLER, side, 0, true, false, sharedStorageFluidInjectors, sharedMachineFluidInjectors, sharedTrashFluidInjectors, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
+                        collectForgeCap(be, ForgeCapabilities.ENERGY, side, 0, true, false, sharedStorageEnergyInjectors, sharedMachineEnergyInjectors, null, null, sharedHandlerPositions, sharedHandlerPriorities, sharedStorageHandlers, sharedTrashHandlers);
 
-                    EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
-                    GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                        EnergyTransferExecutor.collectMekanismCapabilities(be, side, true, false, sharedMekEnergyInjectors, null);
+                        GasTransferExecutor.collectCapabilities(be, side, true, false, sharedGasInjectors, null, sharedInfuseInjectors, null, sharedPigmentInjectors, null, sharedSlurryInjectors, null);
+                    }
                 }
             }
 
@@ -525,15 +532,23 @@ public class NetworkController {
             if (!level.isLoaded(neighborPos)) continue;
 
             TransferMode mode = pipe.getMode(dir);
-            if (mode != TransferMode.EXTRACT && mode != TransferMode.BOTH) {
-                continue;
-            }
+            Direction side = dir.getOpposite();
 
             BlockEntity neighborBE = level.getBlockEntity(neighborPos);
             if (neighborBE == null) continue;
 
+            MachineSideDetector.SideAccess access = MachineSideDetector.getSideAccess(neighborBE, side);
+            boolean canExtract = MachineSideDetector.isEffectiveExtract(mode, access);
+            if (!canExtract) {
+                continue; // Machine side config priority: block extraction if machine side does not allow output
+            }
+
+            // O(1) Fast-Skip: If the machine output slot has no items ready, skip entire extraction simulation
+            if (!MachineSideDetector.hasFinishedOutput(neighborBE, side)) {
+                continue;
+            }
+
             foundAnyInventory = true;
-            Direction side = dir.getOpposite();
             int nodeOverclocks = pipe.getUpgradeHandler(dir).getStackInSlot(0).getCount();
             int effectiveOverclocks = Math.max(this.overclockCount, nodeOverclocks);
             int sourcePriority = pipe.getPriority(dir);
@@ -542,7 +557,7 @@ public class NetworkController {
             // 1. アイテム分散搬出
             if (!sharedAllItemInjectors.isEmpty()) {
                 var itemOpt = neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, side);
-                IItemHandler itemHandler = itemOpt.isPresent() ? itemOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
+                IItemHandler itemHandler = itemOpt.isPresent() ? itemOpt.orElse(null) : (!access.isConfiguredMachine() ? neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null) : null);
                 if (itemHandler != null && !tickReceivedItemHandlers.contains(itemHandler)) {
                     List<IItemHandler> itemTargets;
                     if (isSourceStorage) {
@@ -588,7 +603,9 @@ public class NetworkController {
                                 null,
                                 sharedHandlerPositions,
                                 sharedStorageHandlers,
-                                tickAllMachinesFullSet
+                                tickAllMachinesFullSet,
+                                neighborBE,
+                                side
                         );
                     }
                 }
@@ -597,7 +614,7 @@ public class NetworkController {
             // 2. 流体分散搬出
             if (!sharedAllFluidInjectors.isEmpty()) {
                 var fluidOpt = neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, side);
-                IFluidHandler fluidHandler = fluidOpt.isPresent() ? fluidOpt.orElse(null) : neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, null).orElse(null);
+                IFluidHandler fluidHandler = fluidOpt.isPresent() ? fluidOpt.orElse(null) : (!access.isConfiguredMachine() ? neighborBE.getCapability(ForgeCapabilities.FLUID_HANDLER, null).orElse(null) : null);
                 if (fluidHandler != null && !tickReceivedFluidHandlers.contains(fluidHandler)) {
                     List<IFluidHandler> fluidTargets;
                     if (isSourceStorage) {

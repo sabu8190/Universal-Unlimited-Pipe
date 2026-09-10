@@ -369,6 +369,25 @@ public class ItemTransferExecutor {
             @Nullable Set<Object> storageHandlers,
             @Nullable Set<ItemKey> tickAllMachinesFullSet
     ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, currentTick, persistentCache, handlerPositions, storageHandlers, tickAllMachinesFullSet, null, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            @Nullable Set<Object> storageHandlers,
+            @Nullable Set<ItemKey> tickAllMachinesFullSet,
+            @Nullable net.minecraft.world.level.block.entity.BlockEntity sourceBE,
+            @Nullable net.minecraft.core.Direction sourceSide
+    ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
@@ -411,6 +430,11 @@ public class ItemTransferExecutor {
         int maxOperations = 512; // Prevents freezing while allowing extreme throughput: up to 32,768 items/tick
 
         for (int slot = 0; slot < slots && movedTotal < maxToMove && opCount < maxOperations; slot++) {
+            // 機械からの搬出時、加工後（出力）スロットのみから排出（加工前の丸石などの誤吸い出しを物理的に完全遮断！）
+            if (sourceBE != null && !com.uup.core.network.MachineSideDetector.isOutputSlot(sourceBE, sourceSide, slot, slots)) {
+                continue;
+            }
+
             while (movedTotal < maxToMove && opCount++ < maxOperations) {
                 ItemStack inSlot = sourceHandler.getStackInSlot(slot);
                 if (inSlot.isEmpty()) break;
