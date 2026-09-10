@@ -68,6 +68,10 @@ public class PipeBlockEntity extends BlockEntity {
         this.lastInventoryCheckTick = -1;
     }
 
+    public boolean hasAdjacentInventory() {
+        return this.hasAdjacentInventory;
+    }
+
     public void markNetworkDirty() {
         standaloneNetwork.markNetworkDirty();
         this.masterController = null;

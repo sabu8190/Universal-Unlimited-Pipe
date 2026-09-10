@@ -339,7 +339,7 @@ public class NetworkController {
         tickAllMachinesFullSet.clear();
 
         long gameTime = level.getGameTime();
-        boolean shouldRescan = injectorsDirty || (gameTime - lastInjectorsScanTick >= 40) || (gameTime < lastInjectorsScanTick);
+        boolean shouldRescan = injectorsDirty || (gameTime - lastInjectorsScanTick >= 600) || (gameTime < lastInjectorsScanTick);
 
         if (shouldRescan) {
             lastInjectorsScanTick = gameTime;
@@ -390,12 +390,16 @@ public class NetworkController {
                 if (level.isLoaded(pipePos)) {
                     BlockEntity be = level.getBlockEntity(pipePos);
                     if (be instanceof PipeBlockEntity pipeBE) {
+                        // 隣接インベントリを持たない中継パイプは外部ターゲットが存在しないため完全スキップ（数千回の無駄スキャンを削減）
+                        if (!pipeBE.hasAdjacentInventory()) {
+                            continue;
+                        }
                         for (Direction dir : Direction.values()) {
                             BlockPos adj = pipePos.relative(dir);
                             if (!cachedPipes.contains(adj) && !foundControllers.contains(adj)) {
-                                TransferNode node = pipeBE.toNodeData(dir);
-                                if (node.getMode() == TransferMode.INSERT || node.getMode() == TransferMode.BOTH) {
-                                    allActiveNodes.add(node);
+                                TransferMode mode = pipeBE.getMode(dir);
+                                if (mode == TransferMode.INSERT || mode == TransferMode.BOTH) {
+                                    allActiveNodes.add(pipeBE.toNodeData(dir));
                                 }
                             }
                         }

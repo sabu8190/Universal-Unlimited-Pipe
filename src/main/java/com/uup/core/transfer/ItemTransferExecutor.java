@@ -185,6 +185,12 @@ public class ItemTransferExecutor {
     private static final Map<ItemKey, IItemHandler> ACTIVE_TARGET_BY_ITEM = 
             Collections.synchronizedMap(new WeakHashMap<>());
 
+    // Active storage search cursor per item: tracks the starting index of non-full storage containers in O(1)
+    private static final Map<ItemKey, Integer> STORAGE_SEARCH_CURSORS = 
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<ItemKey, Long> STORAGE_CURSOR_RESET_TICKS = 
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     // Round-robin cursor per source handler to distribute items evenly across processing machines
     private static final Map<IItemHandler, Integer> ROUND_ROBIN_CURSORS = 
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -196,6 +202,8 @@ public class ItemTransferExecutor {
     public static void clearTargetStateCache() {
         TARGET_STATE_CACHE.clear();
         ACTIVE_TARGET_BY_ITEM.clear();
+        STORAGE_SEARCH_CURSORS.clear();
+        STORAGE_CURSOR_RESET_TICKS.clear();
         ROUND_ROBIN_CURSORS.clear();
     }
 
@@ -495,24 +503,43 @@ public class ItemTransferExecutor {
                 ItemKey itemKey = ItemKey.of(inSlot);
                 boolean transferred = false;
 
-                // 1. Storage ターゲットへの搬入 (Sticky Nearest-First)
+                // 1. Storage ターゲットへの搬入 (Sticky Nearest-First with Active Cursor)
                 if (storageTargets != null && !storageTargets.isEmpty()) {
                     IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
                     if (activeTarget != null && activeTarget != sourceHandler && storageTargets.contains(activeTarget)) {
-                        Set<ItemKey> rejected = rejectedMap.get(activeTarget);
-                        if (rejected == null || !rejected.contains(itemKey)) {
-                            int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
-                            if (moved > 0) {
-                                movedTotal += moved;
-                                transferred = true;
-                            } else {
-                                ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                        TargetState state = TARGET_STATE_CACHE.get(activeTarget);
+                        if (state != null && state.isFull(itemKey, currentTick)) {
+                            ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                        } else {
+                            Set<ItemKey> rejected = rejectedMap.get(activeTarget);
+                            if (rejected == null || !rejected.contains(itemKey)) {
+                                int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
+                                if (moved > 0) {
+                                    movedTotal += moved;
+                                    transferred = true;
+                                } else {
+                                    ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+                                }
                             }
                         }
                     }
 
                     if (!transferred) {
-                        for (IItemHandler target : storageTargets) {
+                        int numStorage = storageTargets.size();
+                        // 20 ticks (1秒) ごとに探索カーソルを手前（0）にリセットして手前空きへの自動復帰を担保
+                        Long lastReset = STORAGE_CURSOR_RESET_TICKS.get(itemKey);
+                        if (lastReset == null || currentTick - lastReset > 20) {
+                            STORAGE_SEARCH_CURSORS.put(itemKey, 0);
+                            STORAGE_CURSOR_RESET_TICKS.put(itemKey, currentTick);
+                        }
+
+                        int startIdx = STORAGE_SEARCH_CURSORS.getOrDefault(itemKey, 0);
+                        if (startIdx >= numStorage) {
+                            startIdx = 0;
+                        }
+
+                        for (int i = startIdx; i < numStorage; i++) {
+                            IItemHandler target = storageTargets.get(i);
                             if (target == null || target == sourceHandler || target == activeTarget) continue;
 
                             Set<ItemKey> rejected = rejectedMap.get(target);
@@ -520,12 +547,29 @@ public class ItemTransferExecutor {
                                 continue;
                             }
 
+                            // 満杯キャッシュの事前チェック ($O(1)$)
+                            TargetState state = TARGET_STATE_CACHE.get(target);
+                            if (state != null && state.isFull(itemKey, currentTick)) {
+                                rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+                                if (i == startIdx) {
+                                    startIdx++;
+                                    STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                                }
+                                continue;
+                            }
+
                             int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
                             if (moved > 0) {
                                 movedTotal += moved;
                                 ACTIVE_TARGET_BY_ITEM.put(itemKey, target);
+                                STORAGE_SEARCH_CURSORS.put(itemKey, i); // 次回はここから直接探索！
                                 transferred = true;
                                 break;
+                            } else {
+                                if (i == startIdx) {
+                                    startIdx++;
+                                    STORAGE_SEARCH_CURSORS.put(itemKey, startIdx);
+                                }
                             }
                         }
                     }
@@ -548,6 +592,13 @@ public class ItemTransferExecutor {
 
                         Set<ItemKey> rejected = rejectedMap.get(target);
                         if (rejected != null && rejected.contains(itemKey)) {
+                            continue;
+                        }
+
+                        // 満杯キャッシュの事前チェック ($O(1)$)
+                        TargetState state = TARGET_STATE_CACHE.get(target);
+                        if (state != null && state.isFull(itemKey, currentTick)) {
+                            rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
                             continue;
                         }
 
@@ -598,6 +649,10 @@ public class ItemTransferExecutor {
         if (currentLimit <= 0) return 0;
 
         TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
+        if (targetState.isFull(itemKey, currentTick)) {
+            rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+            return 0;
+        }
 
         ItemStack probeStack = currentInSlot.copy();
         probeStack.setCount(currentLimit);
