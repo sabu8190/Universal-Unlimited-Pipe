@@ -109,6 +109,7 @@ public class NetworkController {
         this.networkDirty = true;
         this.injectorsDirty = true;
         MachineSideDetector.clearCache();
+        ItemTransferExecutor.clearTargetStateCache();
     }
 
     public boolean hasController() {
@@ -160,6 +161,7 @@ public class NetworkController {
         lowestPipePos = null;
         this.injectorsDirty = true;
         MachineSideDetector.clearCache();
+        ItemTransferExecutor.clearTargetStateCache();
 
         Queue<BlockPos> queue = new ArrayDeque<>();
         Set<BlockPos> visited = new HashSet<>();
@@ -262,11 +264,7 @@ public class NetworkController {
             positions.put(handler, be.getBlockPos());
         }
         if (priorities != null) {
-            int effectivePriority = priority;
-            if (StorageDetector.isTrashCan(be)) {
-                effectivePriority += 100; // Trash / Void receptacles get priority bonus (+100) to safely void output items instead of recycling to input storage
-            }
-            priorities.put(handler, effectivePriority);
+            priorities.put(handler, priority);
         }
         boolean isStorage = StorageDetector.isStorage(be);
         if (isStorage && storageSet != null) {
@@ -554,6 +552,8 @@ public class NetworkController {
             int sourcePriority = pipe.getPriority(dir);
             boolean isSourceStorage = StorageDetector.isStorage(neighborBE);
 
+            long gameTime = level.getGameTime();
+
             // 1. アイテム分散搬出
             if (!sharedAllItemInjectors.isEmpty()) {
                 var itemOpt = neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, side);
@@ -566,7 +566,6 @@ public class NetworkController {
                         itemTargets = new ArrayList<>();
                         if (maxStoragePriority > sourcePriority) {
                             for (IItemHandler target : sharedStorageItemInjectors) {
-                                if (sharedTrashHandlers.contains(target)) continue; // Never void from input storage
                                 if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
                                     itemTargets.add(target);
                                 } else {
@@ -574,19 +573,19 @@ public class NetworkController {
                                 }
                             }
                         }
+                        // Allow trashing/voiding items from storage if trash priority is >= sourcePriority
+                        for (IItemHandler trashTarget : sharedTrashItemInjectors) {
+                            if (sharedHandlerPriorities.getOrDefault(trashTarget, 0) >= sourcePriority && !itemTargets.contains(trashTarget)) {
+                                itemTargets.add(trashTarget);
+                            }
+                        }
                         for (IItemHandler target : sharedMachineItemInjectors) {
-                            if (!sharedTrashHandlers.contains(target)) {
+                            if (!itemTargets.contains(target)) {
                                 itemTargets.add(target);
                             }
                         }
                     } else {
-                        if (!sharedTrashItemInjectors.isEmpty()) {
-                            itemTargets = sharedTrashItemInjectors; // Directly void machine products without recycling into input chests!
-                        } else if (!sharedStorageItemInjectors.isEmpty()) {
-                            itemTargets = sharedStorageItemInjectors;
-                        } else {
-                            itemTargets = sharedAllItemInjectors;
-                        }
+                        itemTargets = sharedAllItemInjectors;
                     }
 
                     if (!itemTargets.isEmpty()) {
@@ -599,7 +598,7 @@ public class NetworkController {
                                 "Network_Target",
                                 tickItemRejectedMap,
                                 tickReceivedItemHandlers,
-                                0L,
+                                gameTime,
                                 null,
                                 sharedHandlerPositions,
                                 sharedStorageHandlers,
@@ -623,7 +622,6 @@ public class NetworkController {
                         fluidTargets = new ArrayList<>();
                         if (maxStoragePriority > sourcePriority) {
                             for (IFluidHandler target : sharedStorageFluidInjectors) {
-                                if (sharedTrashHandlers.contains(target)) continue;
                                 if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
                                     fluidTargets.add(target);
                                 } else {
@@ -631,19 +629,19 @@ public class NetworkController {
                                 }
                             }
                         }
+                        // Allow voiding fluid from storage if trash priority is >= sourcePriority
+                        for (IFluidHandler trashTarget : sharedTrashFluidInjectors) {
+                            if (sharedHandlerPriorities.getOrDefault(trashTarget, 0) >= sourcePriority && !fluidTargets.contains(trashTarget)) {
+                                fluidTargets.add(trashTarget);
+                            }
+                        }
                         for (IFluidHandler target : sharedMachineFluidInjectors) {
-                            if (!sharedTrashHandlers.contains(target)) {
+                            if (!fluidTargets.contains(target)) {
                                 fluidTargets.add(target);
                             }
                         }
                     } else {
-                        if (!sharedTrashFluidInjectors.isEmpty()) {
-                            fluidTargets = sharedTrashFluidInjectors;
-                        } else if (!sharedStorageFluidInjectors.isEmpty()) {
-                            fluidTargets = sharedStorageFluidInjectors;
-                        } else {
-                            fluidTargets = sharedAllFluidInjectors;
-                        }
+                        fluidTargets = sharedAllFluidInjectors;
                     }
 
                     if (!fluidTargets.isEmpty()) {

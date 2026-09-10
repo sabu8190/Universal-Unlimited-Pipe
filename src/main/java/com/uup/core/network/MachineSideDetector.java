@@ -63,7 +63,12 @@ public class MachineSideDetector {
     }
 
     private static SideAccess evaluateSideAccess(BlockEntity be, Direction side) {
-        // 1. Storage blocks (Chests, Barrels, Drawers, Trash Cans) that have NO sided machine configuration
+        // 1. Trash cans and void receptacles always accept items/fluids from any side unconditionally
+        if (StorageDetector.isTrashCan(be)) {
+            return SideAccess.PASS_THROUGH;
+        }
+
+        // 2. Storage blocks (Chests, Barrels, Drawers) that have NO sided machine configuration
         if (StorageDetector.isStorage(be)) {
             if (!isMekanismLoaded() || !MekanismHelper.isMekanismMachine(be)) {
                 return SideAccess.PASS_THROUGH;

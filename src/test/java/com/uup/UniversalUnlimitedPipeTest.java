@@ -207,53 +207,64 @@ public class UniversalUnlimitedPipeTest {
     }
 
     @Test
-    public void testTrashCanPriorityBonus() {
-        // Normal chest priority = 0, Trash Can priority = 0 + 100 = 100
+    public void testTrashCanRespectsUserPipePriority() {
+        // Trash cans respect pipe priorities instead of artificial +100 bonus
         int normalChestPriority = 0;
-        int trashCanPriority = 100;
+        int trashCanPriority = 0;
 
         java.util.List<Integer> priorities = new java.util.ArrayList<>(java.util.List.of(normalChestPriority, trashCanPriority));
-        priorities.sort((p1, p2) -> Integer.compare(p2, p1)); // Descending
-
-        Assertions.assertEquals(100, priorities.get(0), "Trash can with +100 bonus must be sorted first for machine outputs, avoiding recycling to storage");
+        Assertions.assertEquals(0, priorities.get(1), "Trash can uses user-defined pipe priority (default 0)");
     }
 
     @Test
-    public void testStorageExtractionNeverTargetsTrashCan() {
-        // Storage containers must never void items directly into trash cans
+    public void testStorageExtractionAllowsTrashCan() {
+        // Storage extraction allows trashing items if trash can priority is >= source priority
         String chestTarget = "StorageChest";
         String trashCanTarget = "TrashCan";
-        java.util.Set<String> trashHandlers = java.util.Set.of(trashCanTarget);
+        int sourcePriority = 0;
+        int trashPriority = 0;
 
-        java.util.List<String> allStorageInjectors = java.util.List.of(trashCanTarget, chestTarget);
-        java.util.List<String> filteredTargets = new java.util.ArrayList<>();
-        for (String target : allStorageInjectors) {
-            if (!trashHandlers.contains(target)) {
-                filteredTargets.add(target);
+        java.util.List<String> trashInjectors = java.util.List.of(trashCanTarget);
+        java.util.List<String> itemTargets = new java.util.ArrayList<>();
+
+        // Add trash targets when trash priority >= source priority
+        for (String trash : trashInjectors) {
+            if (trashPriority >= sourcePriority && !itemTargets.contains(trash)) {
+                itemTargets.add(trash);
             }
         }
 
-        Assertions.assertEquals(1, filteredTargets.size(), "Trash cans must be excluded from storage extraction targets");
-        Assertions.assertEquals(chestTarget, filteredTargets.get(0), "Only non-trash storage must be eligible for storage extraction");
+        Assertions.assertEquals(1, itemTargets.size(), "Trash cans must be eligible for storage extraction");
+        Assertions.assertEquals(trashCanTarget, itemTargets.get(0), "Trash can must receive items from storage");
     }
 
     @Test
-    public void testMachineExtractionDirectsToTrashCan() {
-        // When trash can is available, machines void directly into trash can without recycling into input chests
-        String chestTarget = "InputChest";
+    public void testMachineExtractionIntegratesChestsAndTrashCans() {
+        // Machine output routes to sharedAllItemInjectors, allowing both storage chests and trash cans
+        String chestTarget = "OutputChest";
         String trashTarget = "TrashCan";
-        java.util.List<String> trashInjectors = java.util.List.of(trashTarget);
-        java.util.List<String> storageInjectors = java.util.List.of(chestTarget);
+        java.util.List<String> allInjectors = java.util.List.of(chestTarget, trashTarget);
 
-        java.util.List<String> machineOutputTargets;
-        if (!trashInjectors.isEmpty()) {
-            machineOutputTargets = trashInjectors;
-        } else {
-            machineOutputTargets = storageInjectors;
-        }
+        java.util.List<String> machineOutputTargets = allInjectors;
 
-        Assertions.assertEquals(1, machineOutputTargets.size(), "Machine output must target only trash can when available");
-        Assertions.assertEquals(trashTarget, machineOutputTargets.get(0), "Machine output must route directly to trash can");
+        Assertions.assertEquals(2, machineOutputTargets.size(), "Machine output targets all eligible injectors in priority order");
+        Assertions.assertEquals(chestTarget, machineOutputTargets.get(0), "Storage chest is available for machine products");
+        Assertions.assertEquals(trashTarget, machineOutputTargets.get(1), "Trash can is available as overflow/secondary target");
+    }
+
+    @Test
+    public void testTargetStateTTLSelfRecovery() {
+        com.uup.core.transfer.ItemTransferExecutor.TargetState state = 
+                new com.uup.core.transfer.ItemTransferExecutor.TargetState();
+        com.uup.core.transfer.ItemTransferExecutor.ItemKey testKey = 
+                new com.uup.core.transfer.ItemTransferExecutor.ItemKey(null, null);
+
+        // Mark full at tick 100
+        state.markFull(testKey, 100L);
+        Assertions.assertTrue(state.isFull(testKey, 105L), "Item must remain marked full within 20-tick TTL");
+
+        // After 21 ticks (tick 121), TTL expires and item can be inserted again (e.g. user emptied chest)
+        Assertions.assertFalse(state.isFull(testKey, 121L), "Item full state must expire after 20 ticks for auto-recovery");
     }
 
     @Test

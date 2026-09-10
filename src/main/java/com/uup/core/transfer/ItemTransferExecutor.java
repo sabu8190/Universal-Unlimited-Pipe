@@ -140,10 +140,42 @@ public class ItemTransferExecutor {
         return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, 0L, null, null);
     }
 
-    private static class TargetState {
+    public static class TargetState {
         final Map<ItemKey, Integer> lastSlotByItem = new HashMap<>();
-        final Set<ItemKey> fullItems = new HashSet<>();
+        final Map<ItemKey, Long> fullItemTicks = new HashMap<>();
         int firstEmptySlot = 0;
+        long lastEmptySlotResetTick = 0;
+
+        public boolean isFull(ItemKey itemKey, long tick) {
+            Long fullTick = fullItemTicks.get(itemKey);
+            if (fullTick == null) return false;
+            if (tick - fullTick > 20) { // 20 ticks (1 sec) TTL for auto-recovery when chests are emptied
+                fullItemTicks.remove(itemKey);
+                return false;
+            }
+            return true;
+        }
+
+        public void markFull(ItemKey itemKey, long tick) {
+            fullItemTicks.put(itemKey, tick);
+        }
+
+        public void removeFull(ItemKey itemKey) {
+            fullItemTicks.remove(itemKey);
+        }
+
+        public void clearAll() {
+            lastSlotByItem.clear();
+            fullItemTicks.clear();
+            firstEmptySlot = 0;
+        }
+
+        public void updateEmptySlotTracking(long tick) {
+            if (tick - lastEmptySlotResetTick > 20) {
+                firstEmptySlot = 0;
+                lastEmptySlotResetTick = tick;
+            }
+        }
     }
 
     private static final Map<IItemHandler, TargetState> TARGET_STATE_CACHE = 
@@ -160,6 +192,12 @@ public class ItemTransferExecutor {
     // Global round-robin cursor across the entire pipe network for perfect machine balancing
     private static final java.util.concurrent.atomic.AtomicInteger GLOBAL_MACHINE_CURSOR = 
             new java.util.concurrent.atomic.AtomicInteger(0);
+
+    public static void clearTargetStateCache() {
+        TARGET_STATE_CACHE.clear();
+        ACTIVE_TARGET_BY_ITEM.clear();
+        ROUND_ROBIN_CURSORS.clear();
+    }
 
     // Cache max stack size per item to prevent BiggerStacks mod's heavy Thread.getStackTrace() overhead
     private static final Map<ItemKey, Integer> ITEM_MAX_STACK_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
@@ -205,9 +243,24 @@ public class ItemTransferExecutor {
             ItemKey itemKey,
             boolean simulate
     ) {
+        return fastInsertItemStacked(target, stack, state, itemKey, simulate, 0L);
+    }
+
+    public static ItemStack fastInsertItemStacked(
+            IItemHandler target,
+            ItemStack stack,
+            @Nullable TargetState state,
+            ItemKey itemKey,
+            boolean simulate,
+            long currentTick
+    ) {
         if (target == null || stack.isEmpty()) return stack;
-        if (state != null && state.fullItems.contains(itemKey)) {
-            return stack; // Immediate O(1) skip for known full targets
+        long effectiveTick = currentTick > 0 ? currentTick : (System.currentTimeMillis() / 50);
+        if (state != null) {
+            state.updateEmptySlotTracking(effectiveTick);
+            if (state.isFull(itemKey, effectiveTick)) {
+                return stack; // Immediate O(1) skip for known full targets within 20 ticks TTL
+            }
         }
         int slots = target.getSlots();
         if (slots <= 0) return stack;
@@ -227,7 +280,7 @@ public class ItemTransferExecutor {
                             int countBefore = stack.getCount();
                             stack = target.insertItem(lastSlot, stack, simulate);
                             if (stack.getCount() < countBefore) {
-                                if (state != null) state.fullItems.remove(itemKey);
+                                state.removeFull(itemKey);
                                 if (stack.isEmpty()) {
                                     return ItemStack.EMPTY;
                                 }
@@ -265,7 +318,7 @@ public class ItemTransferExecutor {
                 if (stack.getCount() < countBefore) {
                     if (state != null) {
                         if (!simulate) state.lastSlotByItem.put(itemKey, i);
-                        state.fullItems.remove(itemKey);
+                        state.removeFull(itemKey);
                     }
                     if (stack.isEmpty()) {
                         return ItemStack.EMPTY;
@@ -292,7 +345,7 @@ public class ItemTransferExecutor {
                                 state.lastSlotByItem.put(itemKey, i);
                                 state.firstEmptySlot = i + 1;
                             }
-                            state.fullItems.remove(itemKey);
+                            state.removeFull(itemKey);
                         }
                         if (stack.isEmpty()) {
                             return ItemStack.EMPTY;
@@ -304,7 +357,7 @@ public class ItemTransferExecutor {
 
         // 挿入できず、これ以上入らない場合はシミュレーション時でも fullItems に即時記録 (O(1)スキップを有効化)
         if (stack.getCount() == initialCount && state != null) {
-            state.fullItems.add(itemKey);
+            state.markFull(itemKey, effectiveTick);
         }
 
         return stack;
@@ -448,7 +501,7 @@ public class ItemTransferExecutor {
                     if (activeTarget != null && activeTarget != sourceHandler && storageTargets.contains(activeTarget)) {
                         Set<ItemKey> rejected = rejectedMap.get(activeTarget);
                         if (rejected == null || !rejected.contains(itemKey)) {
-                            int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                            int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
                             if (moved > 0) {
                                 movedTotal += moved;
                                 transferred = true;
@@ -467,7 +520,7 @@ public class ItemTransferExecutor {
                                 continue;
                             }
 
-                            int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                            int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
                             if (moved > 0) {
                                 movedTotal += moved;
                                 ACTIVE_TARGET_BY_ITEM.put(itemKey, target);
@@ -498,7 +551,7 @@ public class ItemTransferExecutor {
                             continue;
                         }
 
-                        int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
+                        int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, currentTick);
                         if (moved > 0) {
                             movedTotal += moved;
                             GLOBAL_MACHINE_CURSOR.set((targetIdx + 1) % numMachines);
@@ -535,7 +588,8 @@ public class ItemTransferExecutor {
             @Nullable Set<IItemHandler> receivedHandlers,
             @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
             String sourceLabel,
-            String targetLabel
+            String targetLabel,
+            long currentTick
     ) {
         ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
         if (currentInSlot.isEmpty()) return 0;
@@ -548,7 +602,7 @@ public class ItemTransferExecutor {
         ItemStack probeStack = currentInSlot.copy();
         probeStack.setCount(currentLimit);
 
-        ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true);
+        ItemStack simRemainder = fastInsertItemStacked(target, probeStack, targetState, itemKey, true, currentTick);
         int accepted = currentLimit - simRemainder.getCount();
 
         if (accepted <= 0) {
@@ -561,17 +615,17 @@ public class ItemTransferExecutor {
 
         TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
         if (srcState != null) {
-            srcState.fullItems.clear();
+            srcState.clearAll();
         }
 
-        ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false);
+        ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false, currentTick);
         int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
 
         if (actuallyMoved > 0) {
             if (receivedHandlers != null) {
                 receivedHandlers.add(target);
             }
-            targetState.fullItems.remove(itemKey);
+            targetState.removeFull(itemKey);
 
             net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
             net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
