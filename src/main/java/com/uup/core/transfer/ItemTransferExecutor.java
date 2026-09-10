@@ -90,6 +90,7 @@ public class ItemTransferExecutor {
 
         Map<IItemHandler, Set<ItemKey>> tickRejectedMap = new IdentityHashMap<>();
         Set<IItemHandler> receivedInThisTick = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<ItemKey> tickAllMachinesFullSet = new HashSet<>();
 
         for (IItemHandler extractor : extractors) {
             if (extractor == null) continue;
@@ -111,7 +112,8 @@ public class ItemTransferExecutor {
                     0L,
                     null,
                     handlerPositions,
-                    storageHandlers
+                    storageHandlers,
+                    tickAllMachinesFullSet
             );
         }
     }
@@ -154,6 +156,10 @@ public class ItemTransferExecutor {
     // Round-robin cursor per source handler to distribute items evenly across processing machines
     private static final Map<IItemHandler, Integer> ROUND_ROBIN_CURSORS = 
             Collections.synchronizedMap(new WeakHashMap<>());
+
+    // Global round-robin cursor across the entire pipe network for perfect machine balancing
+    private static final java.util.concurrent.atomic.AtomicInteger GLOBAL_MACHINE_CURSOR = 
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
     // Cache max stack size per item to prevent BiggerStacks mod's heavy Thread.getStackTrace() overhead
     private static final Map<ItemKey, Integer> ITEM_MAX_STACK_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
@@ -346,6 +352,23 @@ public class ItemTransferExecutor {
             @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
             @Nullable Set<Object> storageHandlers
     ) {
+        return executeTransfer(sourceHandler, targetHandlers, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, currentTick, persistentCache, handlerPositions, storageHandlers, null);
+    }
+
+    public static long executeTransfer(
+            IItemHandler sourceHandler,
+            List<IItemHandler> targetHandlers,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<IItemHandler, Map<ItemKey, Long>> persistentCache,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            @Nullable Set<Object> storageHandlers,
+            @Nullable Set<ItemKey> tickAllMachinesFullSet
+    ) {
         if (sourceHandler == null || targetHandlers == null || targetHandlers.isEmpty()) {
             return 0;
         }
@@ -384,11 +407,11 @@ public class ItemTransferExecutor {
         }
 
         int numMachines = machineTargets != null ? machineTargets.size() : 0;
-        int rrCursor = numMachines > 0 ? ROUND_ROBIN_CURSORS.getOrDefault(sourceHandler, 0) : 0;
-        if (rrCursor >= numMachines) rrCursor = 0;
+        int opCount = 0;
+        int maxOperations = 64; // Prevents freezing: max 64 batch transfers per pipe tick (up to 4,096+ items/tick)
 
-        for (int slot = 0; slot < slots && movedTotal < maxToMove; slot++) {
-            while (movedTotal < maxToMove) {
+        for (int slot = 0; slot < slots && movedTotal < maxToMove && opCount < maxOperations; slot++) {
+            while (movedTotal < maxToMove && opCount++ < maxOperations) {
                 ItemStack inSlot = sourceHandler.getStackInSlot(slot);
                 if (inSlot.isEmpty()) break;
 
@@ -431,10 +454,18 @@ public class ItemTransferExecutor {
                     }
                 }
 
-                // 2. Storage に入らなかった場合、Machine ターゲットへの均等分配 (Round-Robin)
+                // 2. Storage に入らなかった場合、Machine ターゲットへの均等分配 (Network Global Round-Robin)
                 if (!transferred && numMachines > 0) {
+                    // 全マシンがこのアイテムについて満杯と判明している場合は O(1) で即座にスキップ！
+                    if (tickAllMachinesFullSet != null && tickAllMachinesFullSet.contains(itemKey)) {
+                        break;
+                    }
+
+                    int startCursor = GLOBAL_MACHINE_CURSOR.get() % numMachines;
+                    if (startCursor < 0) startCursor = 0;
+
                     for (int offset = 0; offset < numMachines && movedTotal < maxToMove; offset++) {
-                        int targetIdx = (rrCursor + offset) % numMachines;
+                        int targetIdx = (startCursor + offset) % numMachines;
                         IItemHandler target = machineTargets.get(targetIdx);
                         if (target == null || target == sourceHandler) continue;
 
@@ -446,11 +477,15 @@ public class ItemTransferExecutor {
                         int moved = tryTransferSlot(sourceHandler, target, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel);
                         if (moved > 0) {
                             movedTotal += moved;
-                            rrCursor = (targetIdx + 1) % numMachines;
-                            ROUND_ROBIN_CURSORS.put(sourceHandler, rrCursor);
+                            GLOBAL_MACHINE_CURSOR.set((targetIdx + 1) % numMachines);
                             transferred = true;
                             break; // 次のマシンへ分散投入
                         }
+                    }
+
+                    // 1周探索してもどのマシンにも入らなかった場合、このTickでは全マシン満杯として即座にマーク
+                    if (!transferred && tickAllMachinesFullSet != null) {
+                        tickAllMachinesFullSet.add(itemKey);
                     }
                 }
 

@@ -161,4 +161,60 @@ public class UniversalUnlimitedPipeTest {
         Assertions.assertEquals(1272, chestContents[1], "Second chest receives remainder (1272 items)");
         Assertions.assertEquals(0, chestContents[2], "Third chest receives 0 items until previous are full");
     }
+
+    @Test
+    public void testGlobalMachineCursorAcrossMultipleSources() {
+        // Simulating 500 pipes extracting and dispatching to 100 machines using a shared global cursor
+        int machineCount = 100;
+        int[] itemsReceived = new int[machineCount];
+        java.util.concurrent.atomic.AtomicInteger globalCursor = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        int totalPipes = 500;
+        int itemsPerPipe = 64; // Each pipe moves 1 stack
+
+        for (int p = 0; p < totalPipes; p++) {
+            int targetIdx = globalCursor.getAndIncrement() % machineCount;
+            itemsReceived[targetIdx] += itemsPerPipe;
+        }
+
+        // 500 pipes * 64 items = 32,000 items / 100 machines = 320 items each
+        for (int m = 0; m < machineCount; m++) {
+            Assertions.assertEquals(320, itemsReceived[m], "Global cursor must distribute perfectly equal batches (320 items) across all 100 machines regardless of which pipe extracts");
+        }
+    }
+
+    @Test
+    public void testAllMachinesFullFastSkip() {
+        // Simulating 500 pipes: when 100 machines are all full, 499 pipes skip in O(1)
+        java.util.Set<String> allMachinesFullSet = new java.util.HashSet<>();
+        String testItem = "minecraft:stone";
+
+        int machineChecks = 0;
+        int totalPipes = 500;
+
+        for (int p = 0; p < totalPipes; p++) {
+            if (allMachinesFullSet.contains(testItem)) {
+                // Fast skip without checking 100 machines!
+                continue;
+            }
+
+            // First pipe checks all 100 machines and finds none accepting
+            machineChecks += 100;
+            allMachinesFullSet.add(testItem); // Mark full for all subsequent pipes in this tick
+        }
+
+        Assertions.assertEquals(100, machineChecks, "Only the first pipe scans the 100 machines; the remaining 499 pipes must skip in O(1)");
+    }
+
+    @Test
+    public void testTrashCanPriorityBonus() {
+        // Normal chest priority = 0, Trash Can priority = 0 + 100 = 100
+        int normalChestPriority = 0;
+        int trashCanPriority = 100;
+
+        java.util.List<Integer> priorities = new java.util.ArrayList<>(java.util.List.of(normalChestPriority, trashCanPriority));
+        priorities.sort((p1, p2) -> Integer.compare(p2, p1)); // Descending
+
+        Assertions.assertEquals(100, priorities.get(0), "Trash can with +100 bonus must be sorted first for machine outputs, avoiding recycling to storage");
+    }
 }

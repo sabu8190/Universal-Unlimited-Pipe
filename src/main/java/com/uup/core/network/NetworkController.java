@@ -77,6 +77,7 @@ public class NetworkController {
     private final Map<IFluidHandler, Set<net.minecraft.world.level.material.Fluid>> tickFluidRejectedMap = new IdentityHashMap<>();
     private final Set<IFluidHandler> tickReceivedFluidHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<IEnergyStorage> tickReceivedEnergyHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<ItemTransferExecutor.ItemKey> tickAllMachinesFullSet = new HashSet<>();
 
     public NetworkController() {
     }
@@ -244,7 +245,11 @@ public class NetworkController {
             positions.put(handler, be.getBlockPos());
         }
         if (priorities != null) {
-            priorities.put(handler, priority);
+            int effectivePriority = priority;
+            if (StorageDetector.isTrashCan(be)) {
+                effectivePriority += 100; // Trash / Void receptacles get priority bonus (+100) to safely void output items instead of recycling to input storage
+            }
+            priorities.put(handler, effectivePriority);
         }
         boolean isStorage = StorageDetector.isStorage(be);
         if (isStorage && storageSet != null) {
@@ -309,6 +314,7 @@ public class NetworkController {
         tickFluidRejectedMap.clear();
         tickReceivedFluidHandlers.clear();
         tickReceivedEnergyHandlers.clear();
+        tickAllMachinesFullSet.clear();
 
         sharedStorageItemInjectors.clear();
         sharedMachineItemInjectors.clear();
@@ -538,7 +544,8 @@ public class NetworkController {
                                 0L,
                                 null,
                                 sharedHandlerPositions,
-                                sharedStorageHandlers
+                                sharedStorageHandlers,
+                                tickAllMachinesFullSet
                         );
                     }
                 }

@@ -95,7 +95,10 @@ public class StorageDetector {
                 || className.contains("battery")
                 || className.contains("capacitor")
                 || className.contains("energycube")
-                || className.contains("interface")) {
+                || className.contains("interface")
+                || className.contains("trash")
+                || className.contains("void")
+                || className.contains("nullifier")) {
             return true;
         }
 
@@ -105,6 +108,21 @@ public class StorageDetector {
         }
 
         return false;
+    }
+
+    private static final Map<Class<?>, Boolean> TRASH_CLASS_CACHE = new ConcurrentHashMap<>();
+
+    public static boolean isTrashCan(BlockEntity be) {
+        if (be == null) return false;
+        Class<?> clazz = be.getClass();
+        Boolean cached = TRASH_CLASS_CACHE.get(clazz);
+        if (cached != null) {
+            return cached;
+        }
+        String className = clazz.getName().toLowerCase(Locale.ROOT);
+        boolean result = className.contains("trash") || className.contains("void") || className.contains("nullifier");
+        TRASH_CLASS_CACHE.put(clazz, result);
+        return result;
     }
 
     public static void clearCache() {
