@@ -528,7 +528,10 @@ public class NetworkController {
 
         boolean foundAnyInventory = false;
         BlockPos pipePos = pipe.getBlockPos();
-        for (Direction dir : Direction.values()) {
+        Direction[] activeSides = pipe.getAdjacentExternalSides(level);
+        if (activeSides.length == 0) return false;
+
+        for (Direction dir : activeSides) {
             BlockPos neighborPos = pipePos.relative(dir);
             if (cachedPipes.contains(neighborPos) || foundControllers.contains(neighborPos)) {
                 continue;
@@ -565,49 +568,54 @@ public class NetworkController {
                 var itemOpt = neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, side);
                 IItemHandler itemHandler = itemOpt.isPresent() ? itemOpt.orElse(null) : (!access.isConfiguredMachine() ? neighborBE.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null) : null);
                 if (itemHandler != null && !tickReceivedItemHandlers.contains(itemHandler)) {
-                    List<IItemHandler> itemTargets;
+                    List<IItemHandler> storageTargets = null;
+                    List<IItemHandler> machineTargets = null;
+
                     if (isSourceStorage) {
                         int maxStoragePriority = sharedStorageItemInjectors.isEmpty() ? Integer.MIN_VALUE 
                                 : sharedHandlerPriorities.getOrDefault(sharedStorageItemInjectors.get(0), 0);
-                        itemTargets = new ArrayList<>();
                         if (maxStoragePriority > sourcePriority) {
+                            storageTargets = new ArrayList<>();
                             for (IItemHandler target : sharedStorageItemInjectors) {
                                 if (sharedHandlerPriorities.getOrDefault(target, 0) > sourcePriority) {
-                                    itemTargets.add(target);
+                                    storageTargets.add(target);
                                 } else {
                                     break;
                                 }
                             }
                         }
                         // Allow trashing/voiding items from storage if trash priority is >= sourcePriority
-                        for (IItemHandler trashTarget : sharedTrashItemInjectors) {
-                            if (sharedHandlerPriorities.getOrDefault(trashTarget, 0) >= sourcePriority && !itemTargets.contains(trashTarget)) {
-                                itemTargets.add(trashTarget);
+                        if (!sharedTrashItemInjectors.isEmpty()) {
+                            for (IItemHandler trashTarget : sharedTrashItemInjectors) {
+                                if (sharedHandlerPriorities.getOrDefault(trashTarget, 0) >= sourcePriority) {
+                                    if (storageTargets == null) storageTargets = new ArrayList<>();
+                                    if (!storageTargets.contains(trashTarget)) storageTargets.add(trashTarget);
+                                }
                             }
                         }
-                        for (IItemHandler target : sharedMachineItemInjectors) {
-                            if (!itemTargets.contains(target)) {
-                                itemTargets.add(target);
-                            }
-                        }
+                        machineTargets = sharedMachineItemInjectors;
                     } else {
-                        itemTargets = sharedAllItemInjectors;
+                        // 機械からの搬出時：1,236個のチェスト群と103台の機械群をゼロコピーで直接渡す！
+                        storageTargets = sharedStorageItemInjectors;
+                        machineTargets = sharedMachineItemInjectors;
                     }
 
-                    if (!itemTargets.isEmpty()) {
+                    boolean hasTargets = (storageTargets != null && !storageTargets.isEmpty()) 
+                            || (machineTargets != null && !machineTargets.isEmpty());
+
+                    if (hasTargets) {
                         sharedHandlerPositions.putIfAbsent(itemHandler, neighborPos);
-                        ItemTransferExecutor.executeTransfer(
+                        ItemTransferExecutor.executeTransferDirect(
                                 itemHandler,
-                                itemTargets,
+                                storageTargets,
+                                machineTargets,
                                 effectiveOverclocks,
                                 neighborPos.toShortString(),
                                 "Network_Target",
                                 tickItemRejectedMap,
                                 tickReceivedItemHandlers,
                                 gameTime,
-                                null,
                                 sharedHandlerPositions,
-                                sharedStorageHandlers,
                                 tickAllMachinesFullSet,
                                 neighborBE,
                                 side

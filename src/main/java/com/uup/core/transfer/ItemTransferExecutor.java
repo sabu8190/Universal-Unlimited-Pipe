@@ -195,7 +195,7 @@ public class ItemTransferExecutor {
 
     // Active nearest target cache: routes items directly to the active filling container in O(1) (for Storage)
     private static final Map<ItemKey, IItemHandler> ACTIVE_TARGET_BY_ITEM = 
-            Collections.synchronizedMap(new WeakHashMap<>());
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     // Active storage search cursor per item: tracks the starting index of non-full storage containers in O(1)
     private static final Map<ItemKey, Integer> STORAGE_SEARCH_CURSORS = 
@@ -462,23 +462,6 @@ public class ItemTransferExecutor {
             return 0;
         }
 
-        long effectiveTick = currentTick > 0 ? currentTick : (System.currentTimeMillis() / 50);
-
-        int baseRate = ModConfig.COMMON != null && ModConfig.COMMON.baseItemTransferRate != null 
-                ? ModConfig.COMMON.baseItemTransferRate.get() : Integer.MAX_VALUE;
-        double multiplier = ModConfig.COMMON != null && ModConfig.COMMON.overclockItemMultiplier != null 
-                ? ModConfig.COMMON.overclockItemMultiplier.get() : 4.0;
-        
-        long maxToMove = (long) (baseRate * Math.pow(multiplier, Math.min(overclocks, 16)));
-        if (maxToMove <= 0) maxToMove = Integer.MAX_VALUE;
-
-        long movedTotal = 0;
-        int slots = sourceHandler.getSlots();
-
-        Map<IItemHandler, Set<ItemKey>> rejectedMap = sharedRejectedMap != null 
-                ? sharedRejectedMap : new IdentityHashMap<>();
-
-        // Partition targetHandlers into storage vs machine targets
         List<IItemHandler> storageTargets = null;
         List<IItemHandler> machineTargets = null;
 
@@ -496,6 +479,60 @@ public class ItemTransferExecutor {
         } else {
             storageTargets = targetHandlers;
         }
+
+        return executeTransferDirect(
+                sourceHandler,
+                storageTargets,
+                machineTargets,
+                overclocks,
+                sourceLabel,
+                targetLabel,
+                sharedRejectedMap,
+                receivedHandlers,
+                currentTick,
+                handlerPositions,
+                tickAllMachinesFullSet,
+                sourceBE,
+                sourceSide
+        );
+    }
+
+    public static long executeTransferDirect(
+            IItemHandler sourceHandler,
+            @Nullable List<IItemHandler> storageTargets,
+            @Nullable List<IItemHandler> machineTargets,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            @Nullable Set<ItemKey> tickAllMachinesFullSet,
+            @Nullable net.minecraft.world.level.block.entity.BlockEntity sourceBE,
+            @Nullable net.minecraft.core.Direction sourceSide
+    ) {
+        boolean hasStorage = storageTargets != null && !storageTargets.isEmpty();
+        boolean hasMachine = machineTargets != null && !machineTargets.isEmpty();
+        if (sourceHandler == null || (!hasStorage && !hasMachine)) {
+            return 0;
+        }
+
+        long effectiveTick = currentTick > 0 ? currentTick : (System.currentTimeMillis() / 50);
+
+        int baseRate = ModConfig.COMMON != null && ModConfig.COMMON.baseItemTransferRate != null 
+                ? ModConfig.COMMON.baseItemTransferRate.get() : Integer.MAX_VALUE;
+        double multiplier = ModConfig.COMMON != null && ModConfig.COMMON.overclockItemMultiplier != null 
+                ? ModConfig.COMMON.overclockItemMultiplier.get() : 4.0;
+        
+        long maxToMove = (long) (baseRate * Math.pow(multiplier, Math.min(overclocks, 16)));
+        if (maxToMove <= 0) maxToMove = Integer.MAX_VALUE;
+
+        long movedTotal = 0;
+        int slots = sourceHandler.getSlots();
+
+        Map<IItemHandler, Set<ItemKey>> rejectedMap = sharedRejectedMap != null 
+                ? sharedRejectedMap : new IdentityHashMap<>();
 
         int numMachines = machineTargets != null ? machineTargets.size() : 0;
         int opCount = 0;
@@ -517,7 +554,7 @@ public class ItemTransferExecutor {
                 // 1. Storage ターゲットへの搬入 (Sticky Nearest-First with Active Cursor)
                 if (storageTargets != null && !storageTargets.isEmpty()) {
                     IItemHandler activeTarget = ACTIVE_TARGET_BY_ITEM.get(itemKey);
-                    if (activeTarget != null && activeTarget != sourceHandler && storageTargets.contains(activeTarget)) {
+                    if (activeTarget != null && activeTarget != sourceHandler) {
                         TargetState state = TARGET_STATE_CACHE.get(activeTarget);
                         if (state != null && state.isFull(itemKey, effectiveTick)) {
                             ACTIVE_TARGET_BY_ITEM.remove(itemKey);

@@ -61,35 +61,45 @@ public class PipeBlockEntity extends BlockEntity {
 
     private NetworkController masterController = null;
     private Boolean hasAdjacentInventoryCached = null;
+    private Direction[] adjacentExternalSidesCached = null;
 
     public void invalidateInventoryCache() {
         this.hasAdjacentInventoryCached = null;
+        this.adjacentExternalSidesCached = null;
     }
 
     public boolean hasAdjacentInventory() {
         if (hasAdjacentInventoryCached == null) {
             if (level == null) return true;
-            hasAdjacentInventoryCached = checkAdjacentInventoryPhysically(level, worldPosition);
+            Direction[] sides = getAdjacentExternalSides(level);
+            hasAdjacentInventoryCached = sides.length > 0;
         }
         return hasAdjacentInventoryCached;
     }
 
-    private static boolean checkAdjacentInventoryPhysically(Level level, BlockPos pos) {
-        for (Direction dir : Direction.values()) {
-            BlockPos neighbor = pos.relative(dir);
-            if (!level.hasChunkAt(neighbor)) continue;
-            BlockState state = level.getBlockState(neighbor);
-            if (state.isAir() || state.getBlock() instanceof com.uup.block.PipeBlock) continue;
-            if (state.is(com.uup.setup.ModBlocks.CONTROLLER.get()) || state.is(com.uup.setup.ModBlocks.NODE.get())) return true;
-            if (level.getBlockEntity(neighbor) != null) return true;
+    public Direction[] getAdjacentExternalSides(Level level) {
+        if (adjacentExternalSidesCached == null) {
+            java.util.List<Direction> sides = new java.util.ArrayList<>(2);
+            for (Direction dir : Direction.values()) {
+                BlockPos neighbor = worldPosition.relative(dir);
+                if (!level.hasChunkAt(neighbor)) continue;
+                BlockState state = level.getBlockState(neighbor);
+                if (state.isAir() || state.getBlock() instanceof com.uup.block.PipeBlock) continue;
+                if (state.is(com.uup.setup.ModBlocks.CONTROLLER.get())) continue;
+                if (level.getBlockEntity(neighbor) != null) {
+                    sides.add(dir);
+                }
+            }
+            adjacentExternalSidesCached = sides.toArray(new Direction[0]);
         }
-        return false;
+        return adjacentExternalSidesCached;
     }
 
     public void markNetworkDirty() {
         standaloneNetwork.markNetworkDirty();
         this.masterController = null;
         this.hasAdjacentInventoryCached = null;
+        this.adjacentExternalSidesCached = null;
     }
 
     public void syncStandaloneMaster(NetworkController controller, BlockPos lowestPos, java.util.Set<BlockPos> controllers) {
