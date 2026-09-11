@@ -63,9 +63,19 @@ public class UUPLogger {
         }
     }
 
+    public static boolean isDebugEnabled() {
+        try {
+            return ModConfig.COMMON != null && ModConfig.COMMON.logLevel != null && "DEBUG".equalsIgnoreCase(ModConfig.COMMON.logLevel.get());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     public static void logRoute(String message) {
-        // Dedicated routing log exclusively for uup.log (does NOT spam Minecraft latest.log)
-        queueLogLine("INFO", message, null);
+        // Dedicated routing log exclusively for uup.log when debug is active (prevents gigabyte spam)
+        if (isDebugEnabled()) {
+            queueLogLine("DEBUG", message, null);
+        }
     }
 
     public static void info(String message) {

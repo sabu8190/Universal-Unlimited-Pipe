@@ -570,6 +570,7 @@ public class NetworkController {
                 if (itemHandler != null && !tickReceivedItemHandlers.contains(itemHandler)) {
                     List<IItemHandler> storageTargets = null;
                     List<IItemHandler> machineTargets = null;
+                    List<IItemHandler> trashTargets = null;
 
                     if (isSourceStorage) {
                         int maxStoragePriority = sharedStorageItemInjectors.isEmpty() ? Integer.MIN_VALUE 
@@ -584,24 +585,21 @@ public class NetworkController {
                                 }
                             }
                         }
-                        // Allow trashing/voiding items from storage if trash priority is >= sourcePriority
-                        if (!sharedTrashItemInjectors.isEmpty()) {
-                            for (IItemHandler trashTarget : sharedTrashItemInjectors) {
-                                if (sharedHandlerPriorities.getOrDefault(trashTarget, 0) >= sourcePriority) {
-                                    if (storageTargets == null) storageTargets = new ArrayList<>();
-                                    if (!storageTargets.contains(trashTarget)) storageTargets.add(trashTarget);
-                                }
-                            }
-                        }
                         machineTargets = sharedMachineItemInjectors;
+                        trashTargets = sharedTrashItemInjectors;
                     } else {
-                        // 機械からの搬出時：1,236個のチェスト群と103台の機械群をゼロコピーで直接渡す！
+                        // 機械からの搬出時：
+                        // 1. チェスト群（sharedStorageItemInjectors）へ搬出！
+                        // 2. 余剰品はゴミ箱群（sharedTrashItemInjectors）へ確実に搬出！
+                        // ※ 他の加工機械群への循環投入は、同種機械無限ループ防止のため行わない
                         storageTargets = sharedStorageItemInjectors;
-                        machineTargets = sharedMachineItemInjectors;
+                        trashTargets = sharedTrashItemInjectors;
+                        machineTargets = null;
                     }
 
                     boolean hasTargets = (storageTargets != null && !storageTargets.isEmpty()) 
-                            || (machineTargets != null && !machineTargets.isEmpty());
+                            || (machineTargets != null && !machineTargets.isEmpty())
+                            || (trashTargets != null && !trashTargets.isEmpty());
 
                     if (hasTargets) {
                         sharedHandlerPositions.putIfAbsent(itemHandler, neighborPos);
@@ -609,6 +607,7 @@ public class NetworkController {
                                 itemHandler,
                                 storageTargets,
                                 machineTargets,
+                                trashTargets,
                                 effectiveOverclocks,
                                 neighborPos.toShortString(),
                                 "Network_Target",

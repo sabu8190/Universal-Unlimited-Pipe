@@ -512,9 +512,29 @@ public class ItemTransferExecutor {
             @Nullable net.minecraft.world.level.block.entity.BlockEntity sourceBE,
             @Nullable net.minecraft.core.Direction sourceSide
     ) {
+        return executeTransferDirect(sourceHandler, storageTargets, machineTargets, null, overclocks, sourceLabel, targetLabel, sharedRejectedMap, receivedHandlers, currentTick, handlerPositions, tickAllMachinesFullSet, sourceBE, sourceSide);
+    }
+
+    public static long executeTransferDirect(
+            IItemHandler sourceHandler,
+            @Nullable List<IItemHandler> storageTargets,
+            @Nullable List<IItemHandler> machineTargets,
+            @Nullable List<IItemHandler> trashTargets,
+            int overclocks,
+            String sourceLabel,
+            String targetLabel,
+            @Nullable Map<IItemHandler, Set<ItemKey>> sharedRejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            long currentTick,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            @Nullable Set<ItemKey> tickAllMachinesFullSet,
+            @Nullable net.minecraft.world.level.block.entity.BlockEntity sourceBE,
+            @Nullable net.minecraft.core.Direction sourceSide
+    ) {
         boolean hasStorage = storageTargets != null && !storageTargets.isEmpty();
         boolean hasMachine = machineTargets != null && !machineTargets.isEmpty();
-        if (sourceHandler == null || (!hasStorage && !hasMachine)) {
+        boolean hasTrash = trashTargets != null && !trashTargets.isEmpty();
+        if (sourceHandler == null || (!hasStorage && !hasMachine && !hasTrash)) {
             return 0;
         }
 
@@ -581,18 +601,24 @@ public class ItemTransferExecutor {
                         }
 
                         // 【巡回プローブ】カーソルが手前（0）以外にある場合、毎tick 1個だけ手前チェストをテスト！
-                        // 1,500万回の全走査スパイクを完全根絶し、1 tick 負荷 0.001ms で手前空きを即時検知＆カーソル復帰
+                        // 満杯キャッシュをバイパスして空きをテストすることで、手前のチェストが空いた瞬間に確実に即時検知＆カーソル復帰
                         if (startIdx > 0) {
                             int probeIdx = (int) (Math.abs(effectiveTick) % startIdx);
                             IItemHandler probeTarget = storageTargets.get(probeIdx);
                             if (probeTarget != null && probeTarget != sourceHandler) {
                                 TargetState probeState = TARGET_STATE_CACHE.get(probeTarget);
-                                if (probeState != null) {
+                                ItemStack probeStack = inSlot.copy();
+                                probeStack.setCount(1);
+                                ItemStack remainder = fastInsertItemStacked(probeTarget, probeStack, null, itemKey, true, effectiveTick);
+                                if (remainder.isEmpty()) {
+                                    if (probeState != null) {
+                                        probeState.removeFull(itemKey);
+                                    }
+                                    ACTIVE_TARGET_BY_ITEM.put(itemKey, probeTarget);
+                                    STORAGE_SEARCH_CURSORS.put(itemKey, probeIdx);
                                     int probeMoved = tryTransferSlot(sourceHandler, probeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
                                     if (probeMoved > 0) {
                                         movedTotal += probeMoved;
-                                        ACTIVE_TARGET_BY_ITEM.put(itemKey, probeTarget);
-                                        STORAGE_SEARCH_CURSORS.put(itemKey, probeIdx);
                                         transferred = true;
                                     }
                                 }
@@ -680,6 +706,19 @@ public class ItemTransferExecutor {
                     }
                 }
 
+                // 3. Storage や Machine に入らなかった場合、Trash ターゲット（ゴミ箱群）へ確実に搬出
+                if (!transferred && trashTargets != null && !trashTargets.isEmpty()) {
+                    for (IItemHandler trashTarget : trashTargets) {
+                        if (trashTarget == null || trashTarget == sourceHandler) continue;
+                        int moved = tryTransferSlot(sourceHandler, trashTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
+                        if (moved > 0) {
+                            movedTotal += moved;
+                            transferred = true;
+                            break;
+                        }
+                    }
+                }
+
                 if (!transferred) {
                     break;
                 }
@@ -745,12 +784,14 @@ public class ItemTransferExecutor {
             }
             targetState.removeFull(itemKey);
 
-            net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
-            net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
-            String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
-            String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
-            String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
-            UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
+            if (UUPLogger.isDebugEnabled()) {
+                net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
+                net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
+                String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
+                String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
+                String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
+                UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
+            }
         }
 
         if (!realRemainder.isEmpty()) {
