@@ -84,6 +84,7 @@ public class NetworkController {
     private final Map<IFluidHandler, Set<net.minecraft.world.level.material.Fluid>> tickFluidRejectedMap = new IdentityHashMap<>();
     private final Set<IFluidHandler> tickReceivedFluidHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<IEnergyStorage> tickReceivedEnergyHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<IEnergyStorage, Long> persistentEnergyCache = new IdentityHashMap<>();
     private final Set<ItemTransferExecutor.ItemKey> tickAllMachinesFullSet = new HashSet<>();
 
     public NetworkController() {
@@ -110,6 +111,7 @@ public class NetworkController {
         this.injectorsDirty = true;
         MachineSideDetector.clearCache();
         ItemTransferExecutor.clearTargetStateCache();
+        persistentEnergyCache.clear();
     }
 
     public boolean hasController() {
@@ -709,14 +711,14 @@ public class NetworkController {
                                 neighborPos.toShortString(),
                                 "Network_Energy_Target",
                                 tickReceivedEnergyHandlers,
-                                0L,
-                                null
+                                gameTime,
+                                persistentEnergyCache
                         );
                     }
                 }
             }
 
-            // 4. Mekanism エネルギー＆ガス分散搬出
+            // 4. Mekanism エネルギー＆ガス分散搬出 (チェストはガスを持たないためスキップ、4 ticks 間隔スロットリング)
             if (!sharedMekEnergyInjectors.isEmpty()) {
                 List<Object> singleMekExt = new ArrayList<>(1);
                 EnergyTransferExecutor.collectMekanismCapabilities(neighborBE, side, false, true, null, singleMekExt);
@@ -725,7 +727,9 @@ public class NetworkController {
                 }
             }
 
-            if (!sharedGasInjectors.isEmpty() || !sharedInfuseInjectors.isEmpty() || !sharedPigmentInjectors.isEmpty() || !sharedSlurryInjectors.isEmpty()) {
+            boolean hasChemicals = !sharedGasInjectors.isEmpty() || !sharedInfuseInjectors.isEmpty() 
+                    || !sharedPigmentInjectors.isEmpty() || !sharedSlurryInjectors.isEmpty();
+            if (hasChemicals && !isSourceStorage && (gameTime % 4L == (Math.abs(neighborPos.hashCode()) % 4L))) {
                 List<Object> sGasExt = new ArrayList<>(1);
                 List<Object> sInfExt = new ArrayList<>(1);
                 List<Object> sPigExt = new ArrayList<>(1);

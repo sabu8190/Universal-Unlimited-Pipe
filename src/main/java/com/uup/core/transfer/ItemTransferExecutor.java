@@ -581,7 +581,7 @@ public class ItemTransferExecutor {
                         } else {
                             Set<ItemKey> rejected = rejectedMap.get(activeTarget);
                             if (rejected == null || !rejected.contains(itemKey)) {
-                                int moved = tryTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
+                                int moved = tryDirectTransferSlot(sourceHandler, activeTarget, slot, itemKey, maxToMove - movedTotal, rejectedMap, receivedHandlers, handlerPositions, sourceLabel, targetLabel, effectiveTick);
                                 if (moved > 0) {
                                     movedTotal += moved;
                                     transferred = true;
@@ -729,6 +729,69 @@ public class ItemTransferExecutor {
             UUPLogger.logTransfer("ITEM", movedTotal, sourceLabel, targetLabel);
         }
         return movedTotal;
+    }
+
+    private static int tryDirectTransferSlot(
+            IItemHandler sourceHandler,
+            IItemHandler target,
+            int slot,
+            ItemKey itemKey,
+            long remainingMoveLimit,
+            Map<IItemHandler, Set<ItemKey>> rejectedMap,
+            @Nullable Set<IItemHandler> receivedHandlers,
+            @Nullable Map<Object, net.minecraft.core.BlockPos> handlerPositions,
+            String sourceLabel,
+            String targetLabel,
+            long currentTick
+    ) {
+        ItemStack currentInSlot = sourceHandler.getStackInSlot(slot);
+        if (currentInSlot.isEmpty()) return 0;
+
+        int currentLimit = (int) Math.min((long) currentInSlot.getCount(), remainingMoveLimit);
+        if (currentLimit <= 0) return 0;
+
+        TargetState targetState = TARGET_STATE_CACHE.computeIfAbsent(target, k -> new TargetState());
+        if (targetState.isFull(itemKey, currentTick)) {
+            rejectedMap.computeIfAbsent(target, k -> new HashSet<>()).add(itemKey);
+            return 0;
+        }
+
+        // Direct-Commit Fast-Path:
+        // 過去実績のある直前搬入先に対してシミュレーション全走査＆コピーを省略し、直接抽出・挿入！
+        ItemStack actuallyExtracted = sourceHandler.extractItem(slot, currentLimit, false);
+        if (actuallyExtracted.isEmpty()) return 0;
+
+        TargetState srcState = TARGET_STATE_CACHE.get(sourceHandler);
+        if (srcState != null) {
+            srcState.clearAll();
+        }
+
+        ItemStack realRemainder = fastInsertItemStacked(target, actuallyExtracted, targetState, itemKey, false, currentTick);
+        int actuallyMoved = actuallyExtracted.getCount() - realRemainder.getCount();
+
+        if (actuallyMoved > 0) {
+            if (receivedHandlers != null) {
+                receivedHandlers.add(target);
+            }
+            targetState.removeFull(itemKey);
+
+            if (UUPLogger.isDebugEnabled()) {
+                net.minecraft.core.BlockPos srcPos = handlerPositions != null ? handlerPositions.get(sourceHandler) : null;
+                net.minecraft.core.BlockPos dstPos = handlerPositions != null ? handlerPositions.get(target) : null;
+                String srcStr = srcPos != null ? srcPos.toShortString() : sourceLabel;
+                String dstStr = dstPos != null ? dstPos.toShortString() : targetLabel;
+                String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(actuallyExtracted.getItem()).toString();
+                UUPLogger.logRoute(String.format("[TargetRoute] %dx %s from %s -> %s", actuallyMoved, itemName, srcStr, dstStr));
+            }
+        }
+
+        // ロールバック安全ネット：入り切らなかった余剰は直ちに元のスロットへ返却
+        if (!realRemainder.isEmpty()) {
+            sourceHandler.insertItem(slot, realRemainder, false);
+            ACTIVE_TARGET_BY_ITEM.remove(itemKey);
+        }
+
+        return actuallyMoved;
     }
 
     private static int tryTransferSlot(
